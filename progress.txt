@@ -384,3 +384,29 @@
 - Listed anti-spoofing measures
 - Described the modular architecture (BlinkDetector, HeadMovementDetector, etc.)
 - Commit: 51db20b
+
+### Security Enhancements
+
+#### Fix 5: Virtual Camera Detection (Level 5 Attack Prevention) - COMPLETED
+- Issue: Attackers could use OBS Virtual Camera or similar software to inject pre-recorded video/deepfakes
+- Root cause: No detection of virtual camera software (Level 5 attack vector per FaceTec security report)
+- Solution: Implemented comprehensive virtual camera detection system
+  - Added VIRTUAL_CAMERA_SIGNATURES list with 30+ known virtual camera identifiers:
+    - OBS Virtual Camera, OBS-Camera
+    - ManyCam, XSplit VCam
+    - Snap Camera, CamTwist
+    - FakeWebcam, Streamlabs
+    - ChromaCam, SplitCam
+    - e2eSoft VCam, AlterCam, SparkoCam
+    - DroidCam, iVCam, EpocCam
+    - NDI Virtual, mmhmm, Reincubate Camo
+    - Generic terms: virtual cam, screen capture, etc.
+  - Added detectVirtualCamera() to check all video input devices
+  - Added checkActiveStreamForVirtualCamera() to verify active stream source
+  - Blocks camera initialization if virtual camera detected
+  - Added VIRTUAL_CAMERA_DETECTED error type with user guidance
+  - Shows clear error message with instructions to disable virtual camera
+  - Logs detected camera label for debugging
+  - Reports virtual camera status in AntiSpoofingModule.getStatus()
+- Reference: FaceTec 2024 Liveness Detection Security Report (Level 5 attacks: 14,000+ attempts blocked)
+- Commit: 6a91a70
