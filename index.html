@@ -788,6 +788,9 @@
             // Clear previous drawings
             ctx.clearRect(0, 0, elements.canvas.width, elements.canvas.height);
 
+            // Process blink detection
+            const blinkResult = BlinkDetector.processFrame(results);
+
             // Check if a face was detected
             if (results && results.faceLandmarks && results.faceLandmarks.length > 0) {
                 const landmarks = results.faceLandmarks[0];
@@ -809,7 +812,9 @@
                     elements.faceGuide.classList.remove('detected');
                     updateStatus(facePosition.message);
                 } else {
-                    updateStatus('Face detected - Ready');
+                    // Show EAR value for debugging/feedback
+                    const earDisplay = blinkResult.ear.average.toFixed(2);
+                    updateStatus(`Face detected - Ready (EAR: ${earDisplay})`);
                 }
 
                 // Draw face landmarks on canvas (mirrored to match video)
@@ -989,6 +994,306 @@
         function isDetectionActive() {
             return isDetectionRunning;
         }
+
+        // =====================================================
+        // BLINK DETECTOR MODULE
+        // Detects blinks using Eye Aspect Ratio (EAR) and blendshapes
+        // =====================================================
+
+        const BlinkDetector = (function() {
+            // Configuration
+            const config = {
+                // EAR threshold - below this value indicates a blink
+                earThreshold: 0.21,
+                // Blendshape threshold - above this value indicates a blink
+                blendshapeThreshold: 0.5,
+                // Minimum consecutive frames to confirm a blink
+                minConsecutiveFrames: 2,
+                // Minimum time between blinks (ms) to avoid double-counting
+                minTimeBetweenBlinks: 150,
+                // Maximum blink duration (ms) - longer than this is considered eyes closed
+                maxBlinkDuration: 500
+            };
+
+            // State
+            let state = {
+                isBlinking: false,
+                blinkStartTime: null,
+                consecutiveBlinkFrames: 0,
+                lastBlinkTime: 0,
+                blinkCount: 0,
+                currentEAR: { left: 1, right: 1, average: 1 },
+                currentBlendshapes: { left: 0, right: 0 }
+            };
+
+            // Eye landmark indices for EAR calculation
+            // Based on MediaPipe Face Mesh 478 landmarks
+            const eyeIndices = {
+                // Left eye landmarks (from viewer's perspective, which is right eye anatomically)
+                leftEye: {
+                    // Vertical landmarks (top to bottom)
+                    top: [159, 158, 157],      // Upper eyelid
+                    bottom: [145, 144, 163],   // Lower eyelid
+                    // Horizontal landmarks (inner to outer)
+                    inner: 133,
+                    outer: 33
+                },
+                // Right eye landmarks (from viewer's perspective, which is left eye anatomically)
+                rightEye: {
+                    top: [386, 385, 384],      // Upper eyelid
+                    bottom: [374, 373, 380],   // Lower eyelid
+                    inner: 362,
+                    outer: 263
+                }
+            };
+
+            /**
+             * Calculate Eye Aspect Ratio (EAR) for one eye
+             * EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
+             * where p1-p6 are the eye landmark points
+             */
+            function calculateEAR(landmarks, eyeConfig) {
+                // Get landmark points
+                const top = eyeConfig.top.map(i => landmarks[i]);
+                const bottom = eyeConfig.bottom.map(i => landmarks[i]);
+                const inner = landmarks[eyeConfig.inner];
+                const outer = landmarks[eyeConfig.outer];
+
+                // Calculate vertical distances (average of 3 pairs)
+                let verticalSum = 0;
+                for (let i = 0; i < 3; i++) {
+                    verticalSum += distance3D(top[i], bottom[i]);
+                }
+                const avgVertical = verticalSum / 3;
+
+                // Calculate horizontal distance
+                const horizontal = distance3D(inner, outer);
+
+                // Calculate EAR
+                if (horizontal === 0) return 1; // Avoid division by zero
+                return avgVertical / horizontal;
+            }
+
+            /**
+             * Calculate 3D Euclidean distance between two landmark points
+             */
+            function distance3D(p1, p2) {
+                const dx = p1.x - p2.x;
+                const dy = p1.y - p2.y;
+                const dz = (p1.z || 0) - (p2.z || 0);
+                return Math.sqrt(dx * dx + dy * dy + dz * dz);
+            }
+
+            /**
+             * Get blink blendshape values from face detection results
+             */
+            function getBlinkBlendshapes(blendshapes) {
+                if (!blendshapes || !Array.isArray(blendshapes)) {
+                    return { left: 0, right: 0 };
+                }
+
+                let leftBlink = 0;
+                let rightBlink = 0;
+
+                // Find eyeBlink blendshapes in the categories array
+                for (const shape of blendshapes) {
+                    if (shape.categoryName === 'eyeBlinkLeft') {
+                        leftBlink = shape.score;
+                    } else if (shape.categoryName === 'eyeBlinkRight') {
+                        rightBlink = shape.score;
+                    }
+                }
+
+                return { left: leftBlink, right: rightBlink };
+            }
+
+            /**
+             * Check if a blink is detected using both EAR and blendshapes
+             * Returns true if either method detects a blink
+             */
+            function isBlinkDetected(earLeft, earRight, blendshapeLeft, blendshapeRight) {
+                // Check EAR method
+                const earAvg = (earLeft + earRight) / 2;
+                const earBlink = earAvg < config.earThreshold;
+
+                // Check blendshape method
+                const blendshapeBlink = blendshapeLeft > config.blendshapeThreshold ||
+                                       blendshapeRight > config.blendshapeThreshold;
+
+                return earBlink || blendshapeBlink;
+            }
+
+            /**
+             * Process a frame and detect blinks
+             * Call this function every frame with the current face results
+             * @param {Object} faceResults - Results from FaceLandmarker.detectForVideo()
+             * @returns {Object} Detection result with blink status and metrics
+             */
+            function processFrame(faceResults) {
+                const now = performance.now();
+
+                // Default result
+                const result = {
+                    blinkDetected: false,
+                    isCurrentlyBlinking: false,
+                    blinkCount: state.blinkCount,
+                    ear: state.currentEAR,
+                    blendshapes: state.currentBlendshapes,
+                    confidence: 0
+                };
+
+                // Check if we have valid face data
+                if (!faceResults || !faceResults.faceLandmarks || faceResults.faceLandmarks.length === 0) {
+                    // Reset state when no face detected
+                    state.isBlinking = false;
+                    state.consecutiveBlinkFrames = 0;
+                    state.blinkStartTime = null;
+                    return result;
+                }
+
+                const landmarks = faceResults.faceLandmarks[0];
+                const blendshapes = faceResults.faceBlendshapes && faceResults.faceBlendshapes.length > 0
+                    ? faceResults.faceBlendshapes[0].categories
+                    : null;
+
+                // Calculate EAR for both eyes
+                const earLeft = calculateEAR(landmarks, eyeIndices.leftEye);
+                const earRight = calculateEAR(landmarks, eyeIndices.rightEye);
+                const earAvg = (earLeft + earRight) / 2;
+
+                // Get blendshape values
+                const blendshapeValues = getBlinkBlendshapes(blendshapes);
+
+                // Update current values
+                state.currentEAR = { left: earLeft, right: earRight, average: earAvg };
+                state.currentBlendshapes = blendshapeValues;
+                result.ear = state.currentEAR;
+                result.blendshapes = state.currentBlendshapes;
+
+                // Check if blink is detected this frame
+                const blinkThisFrame = isBlinkDetected(
+                    earLeft, earRight,
+                    blendshapeValues.left, blendshapeValues.right
+                );
+
+                result.isCurrentlyBlinking = blinkThisFrame;
+
+                if (blinkThisFrame) {
+                    state.consecutiveBlinkFrames++;
+
+                    // Start tracking blink time
+                    if (!state.blinkStartTime) {
+                        state.blinkStartTime = now;
+                    }
+
+                    // Calculate confidence based on how strongly the blink is detected
+                    const earConfidence = Math.max(0, 1 - (earAvg / config.earThreshold));
+                    const blendshapeConfidence = Math.max(blendshapeValues.left, blendshapeValues.right);
+                    result.confidence = Math.max(earConfidence, blendshapeConfidence);
+
+                    // Check if we've reached the minimum consecutive frames
+                    if (state.consecutiveBlinkFrames >= config.minConsecutiveFrames && !state.isBlinking) {
+                        // Check if enough time has passed since last blink
+                        if (now - state.lastBlinkTime > config.minTimeBetweenBlinks) {
+                            state.isBlinking = true;
+                        }
+                    }
+                } else {
+                    // Eyes are open now
+                    if (state.isBlinking) {
+                        // Blink just ended - check if it was a valid blink duration
+                        const blinkDuration = now - (state.blinkStartTime || now);
+
+                        if (blinkDuration < config.maxBlinkDuration) {
+                            // Valid blink completed
+                            state.blinkCount++;
+                            state.lastBlinkTime = now;
+                            result.blinkDetected = true;
+                            result.blinkCount = state.blinkCount;
+                            console.log(`Blink detected! Count: ${state.blinkCount}, Duration: ${blinkDuration.toFixed(0)}ms`);
+                        }
+                    }
+
+                    // Reset blink tracking
+                    state.isBlinking = false;
+                    state.consecutiveBlinkFrames = 0;
+                    state.blinkStartTime = null;
+                }
+
+                return result;
+            }
+
+            /**
+             * Reset the blink detector state
+             * Call this when starting a new challenge
+             */
+            function reset() {
+                state = {
+                    isBlinking: false,
+                    blinkStartTime: null,
+                    consecutiveBlinkFrames: 0,
+                    lastBlinkTime: 0,
+                    blinkCount: 0,
+                    currentEAR: { left: 1, right: 1, average: 1 },
+                    currentBlendshapes: { left: 0, right: 0 }
+                };
+                console.log('BlinkDetector reset');
+            }
+
+            /**
+             * Get the current blink count
+             */
+            function getBlinkCount() {
+                return state.blinkCount;
+            }
+
+            /**
+             * Get the current EAR values
+             */
+            function getCurrentEAR() {
+                return state.currentEAR;
+            }
+
+            /**
+             * Get the current blendshape values
+             */
+            function getCurrentBlendshapes() {
+                return state.currentBlendshapes;
+            }
+
+            /**
+             * Check if currently in a blink
+             */
+            function isCurrentlyBlinking() {
+                return state.isBlinking;
+            }
+
+            /**
+             * Update configuration
+             */
+            function setConfig(newConfig) {
+                Object.assign(config, newConfig);
+            }
+
+            /**
+             * Get current configuration
+             */
+            function getConfig() {
+                return { ...config };
+            }
+
+            // Public API
+            return {
+                processFrame,
+                reset,
+                getBlinkCount,
+                getCurrentEAR,
+                getCurrentBlendshapes,
+                isCurrentlyBlinking,
+                setConfig,
+                getConfig
+            };
+        })();
 
         // Initialize the app on page load
         document.addEventListener('DOMContentLoaded', async () => {
