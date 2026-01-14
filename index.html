@@ -1970,10 +1970,10 @@
                 pitchThreshold: 8,
                 // Hold duration required in milliseconds
                 holdDuration: 500,
-                // Smoothing factor for angle calculations (0-1, higher = more smoothing)
-                smoothingFactor: 0.3,
+                // Smoothing factor for angle calculations (0-1, higher = more responsive)
+                smoothingFactor: 0.6,
                 // Number of frames to establish baseline
-                calibrationFrames: 30,
+                calibrationFrames: 20,
                 // Maximum allowed deviation during hold (degrees)
                 holdTolerance: 5
             };
@@ -3945,6 +3945,36 @@
             }
 
             /**
+             * Retry the current challenge without restarting everything
+             */
+            function retryCurrentChallenge() {
+                // Clear any existing timer
+                clearInterval(timerInterval);
+
+                state.failureReason = null;
+                state.isActive = true;
+
+                // Hide result screen, show challenge panel
+                elements.resultScreen.classList.remove('visible');
+                elements.resultScreen.classList.remove('failure');
+                elements.challengePanel.classList.remove('hidden');
+
+                // Reset faceGuide state
+                elements.faceGuide.classList.remove('warning');
+                elements.faceGuide.classList.add('detected');
+
+                // Restart anti-spoofing session
+                if (config.enableAntiSpoofing) {
+                    AntiSpoofingModule.startSession();
+                }
+
+                // Transition to PRESENTING for the current challenge
+                transitionTo(States.PRESENTING);
+
+                console.log('ChallengeManager: Retrying current challenge');
+            }
+
+            /**
              * Reset for retry
              */
             function reset() {
@@ -4032,6 +4062,7 @@
                 start,
                 stop,
                 reset,
+                retryCurrentChallenge,
                 processFrame,
                 isActive,
                 getCurrentState,
@@ -4170,8 +4201,8 @@
 
             // Retry button click handler
             elements.retryBtn.addEventListener('click', () => {
-                // Reset ChallengeManager and restart
-                ChallengeManager.reset();
+                // Retry current challenge without restarting everything
+                ChallengeManager.retryCurrentChallenge();
 
                 // Hide face warning if visible
                 hideFaceWarning();
