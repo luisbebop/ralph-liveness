@@ -897,6 +897,12 @@
                 title: 'Loading Timed Out',
                 helpText: 'The app is taking too long to load.\n\nThis might be due to:\n1. Slow internet connection\n2. Server issues\n\nPlease try again or refresh the page.',
                 canRetry: true
+            },
+            VIRTUAL_CAMERA_DETECTED: {
+                icon: '🛡️',
+                title: 'Virtual Camera Detected',
+                helpText: 'A virtual camera (e.g., OBS, ManyCam) was detected.\n\nFor security reasons, liveness verification requires a real physical camera.\n\nTo fix:\n1. Disable virtual camera software\n2. Select your real camera in browser settings\n3. Refresh the page',
+                canRetry: true
             }
         };
 
@@ -985,6 +991,130 @@
             return isModelReady && faceLandmarker !== null;
         }
 
+        // Known virtual camera software signatures (case-insensitive matching)
+        const VIRTUAL_CAMERA_SIGNATURES = [
+            // OBS Studio
+            'obs virtual camera', 'obs-camera', 'obs camera',
+            // ManyCam
+            'manycam',
+            // XSplit VCam
+            'xsplit vcam', 'vcam', 'xsplit',
+            // Snap Camera
+            'snap camera', 'snapcamera',
+            // CamTwist
+            'camtwist',
+            // FakeWebcam
+            'fakewebcam', 'fake webcam', 'fake camera',
+            // Logi Capture (Logitech)
+            'logi capture',
+            // Streamlabs
+            'streamlabs',
+            // ChromaCam
+            'chromacam',
+            // SplitCam
+            'splitcam',
+            // e2eSoft VCam
+            'e2esoft', 'e2e soft',
+            // AlterCam
+            'altercam',
+            // SparkoCam
+            'sparkocam',
+            // YouCam (virtual mode)
+            'youcam virtual', 'cyberlink youcam',
+            // DroidCam (Android as webcam - can be used for injection)
+            'droidcam',
+            // iVCam
+            'ivcam',
+            // EpocCam
+            'epoccam',
+            // NDI (Network Device Interface - used for video injection)
+            'ndi virtual', 'ndi webcam',
+            // mmhmm
+            'mmhmm',
+            // Camo (Reincubate)
+            'reincubate camo',
+            // Generic virtual camera terms
+            'virtual cam', 'virtual camera', 'virtualcam', 'virtualcamera',
+            'screen capture', 'screen share',
+            // Browser-based virtual cameras
+            'chromium virtual', 'browser camera'
+        ];
+
+        // Store detected camera info
+        let detectedCameraLabel = null;
+        let isVirtualCameraDetected = false;
+
+        /**
+         * Detect if a virtual camera is being used
+         * Returns object with { isVirtual: boolean, label: string, signature: string }
+         */
+        async function detectVirtualCamera() {
+            try {
+                // Get all media devices
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+
+                console.log('Detected video devices:', videoDevices.map(d => d.label || 'unlabeled'));
+
+                // Check each video device for virtual camera signatures
+                for (const device of videoDevices) {
+                    const label = (device.label || '').toLowerCase();
+
+                    // Skip empty labels (happens before camera permission is granted)
+                    if (!label) continue;
+
+                    for (const signature of VIRTUAL_CAMERA_SIGNATURES) {
+                        if (label.includes(signature)) {
+                            console.warn(`Virtual camera detected: "${device.label}" (matched: "${signature}")`);
+                            return {
+                                isVirtual: true,
+                                label: device.label,
+                                signature: signature
+                            };
+                        }
+                    }
+                }
+
+                return { isVirtual: false, label: null, signature: null };
+            } catch (error) {
+                console.error('Error detecting virtual camera:', error);
+                // On error, allow through but log the issue
+                return { isVirtual: false, label: null, signature: null, error: error.message };
+            }
+        }
+
+        /**
+         * Check if the active video stream is from a virtual camera
+         * This is called after getUserMedia to check the actual selected device
+         */
+        async function checkActiveStreamForVirtualCamera(stream) {
+            if (!stream) return { isVirtual: false };
+
+            const videoTrack = stream.getVideoTracks()[0];
+            if (!videoTrack) return { isVirtual: false };
+
+            const label = (videoTrack.label || '').toLowerCase();
+            detectedCameraLabel = videoTrack.label;
+
+            console.log('Active camera label:', videoTrack.label);
+
+            // Check against virtual camera signatures
+            for (const signature of VIRTUAL_CAMERA_SIGNATURES) {
+                if (label.includes(signature)) {
+                    console.warn(`Active stream is from virtual camera: "${videoTrack.label}" (matched: "${signature}")`);
+                    isVirtualCameraDetected = true;
+                    return {
+                        isVirtual: true,
+                        label: videoTrack.label,
+                        signature: signature
+                    };
+                }
+            }
+
+            isVirtualCameraDetected = false;
+            return { isVirtual: false, label: videoTrack.label };
+        }
+
         /**
          * Initialize WebRTC camera with getUserMedia
          * Requests camera access and sets up the video stream with mirrored view
@@ -1006,6 +1136,21 @@
             try {
                 // Request camera access
                 videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+                // Check if the active stream is from a virtual camera (Level 5 attack prevention)
+                const virtualCameraCheck = await checkActiveStreamForVirtualCamera(videoStream);
+                if (virtualCameraCheck.isVirtual) {
+                    // Stop the stream from virtual camera
+                    videoStream.getTracks().forEach(track => track.stop());
+                    videoStream = null;
+                    isCameraReady = false;
+
+                    showError(
+                        `Virtual camera detected: "${virtualCameraCheck.label}". For security, please use a real camera.`,
+                        'VIRTUAL_CAMERA_DETECTED'
+                    );
+                    return false;
+                }
 
                 // Attach stream to video element
                 elements.video.srcObject = videoStream;
@@ -1029,6 +1174,7 @@
                 isCameraReady = true;
                 updateStatus('Camera ready');
                 console.log(`Camera initialized: ${elements.video.videoWidth}x${elements.video.videoHeight}`);
+                console.log(`Using camera: ${detectedCameraLabel}`);
 
                 return true;
             } catch (error) {
@@ -1078,6 +1224,22 @@
 
             try {
                 videoStream = await navigator.mediaDevices.getUserMedia(basicConstraints);
+
+                // Check if the active stream is from a virtual camera (Level 5 attack prevention)
+                const virtualCameraCheck = await checkActiveStreamForVirtualCamera(videoStream);
+                if (virtualCameraCheck.isVirtual) {
+                    // Stop the stream from virtual camera
+                    videoStream.getTracks().forEach(track => track.stop());
+                    videoStream = null;
+                    isCameraReady = false;
+
+                    showError(
+                        `Virtual camera detected: "${virtualCameraCheck.label}". For security, please use a real camera.`,
+                        'VIRTUAL_CAMERA_DETECTED'
+                    );
+                    return false;
+                }
+
                 elements.video.srcObject = videoStream;
 
                 await new Promise((resolve, reject) => {
@@ -1094,6 +1256,7 @@
                 isCameraReady = true;
                 updateStatus('Camera ready (basic mode)');
                 console.log(`Camera initialized (basic): ${elements.video.videoWidth}x${elements.video.videoHeight}`);
+                console.log(`Using camera: ${detectedCameraLabel}`);
 
                 return true;
             } catch (error) {
@@ -3220,7 +3383,12 @@
                     sessionDuration: state.sessionStartTime ? performance.now() - state.sessionStartTime : 0,
                     blinkCount: state.blinkTimestamps.length,
                     scores: { ...state.scores },
-                    spoofingCheck: checkForSpoofing()
+                    spoofingCheck: checkForSpoofing(),
+                    // Virtual camera detection status (Level 5 attack prevention)
+                    virtualCamera: {
+                        isDetected: isVirtualCameraDetected,
+                        cameraLabel: detectedCameraLabel
+                    }
                 };
             }
 
