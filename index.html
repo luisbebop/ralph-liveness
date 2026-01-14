@@ -2830,6 +2830,430 @@
         })();
 
         // =====================================================
+        // ANTI-SPOOFING MODULE
+        // Detects photo/video spoofing attempts through multiple analysis methods
+        // =====================================================
+
+        const AntiSpoofingModule = (function() {
+            // Configuration
+            const config = {
+                // Face position tracking
+                positionHistorySize: 60, // ~2 seconds at 30fps
+                maxPositionVariance: 0.15, // Max allowed variance in face position (too stable = photo)
+                minPositionVariance: 0.001, // Min variance (some natural micro-movements expected)
+
+                // 3D depth analysis
+                depthHistorySize: 30,
+                minDepthVariance: 0.0005, // Real faces have subtle depth changes
+
+                // Blink pattern analysis
+                blinkHistorySize: 10,
+                minBlinkInterval: 1000, // Minimum 1 second between blinks
+                maxBlinkInterval: 15000, // Maximum 15 seconds without blinking is suspicious
+                naturalBlinkRate: { min: 10, max: 30 }, // Blinks per minute
+
+                // Movement naturalness
+                movementHistorySize: 30,
+                minMovementVariance: 0.001, // Some movement expected
+
+                // Scoring
+                suspicionThreshold: 0.7, // Score above this triggers failure
+                warningThreshold: 0.5
+            };
+
+            // Tracking state
+            let state = {
+                // Face position history (normalized x, y coordinates of face center)
+                positionHistory: [],
+
+                // Depth (z-coordinate) history for 3D analysis
+                depthHistory: [],
+
+                // Blink timestamps for pattern analysis
+                blinkTimestamps: [],
+                lastBlinkTime: null,
+
+                // Movement magnitude history
+                movementHistory: [],
+                lastPosition: null,
+
+                // Per-frame face landmark positions for micro-movement detection
+                landmarkHistory: [],
+
+                // Suspicion scores (0-1, higher = more suspicious)
+                scores: {
+                    positionStability: 0, // High if face too stable (photo)
+                    depthVariance: 0, // High if no depth variance (flat image)
+                    blinkPattern: 0, // High if blink pattern is unnatural
+                    movementPattern: 0, // High if movements are too regular/mechanical
+                    overallScore: 0
+                },
+
+                // Session tracking
+                sessionStartTime: null,
+                frameCount: 0,
+                isActive: false,
+
+                // Warnings issued
+                warningsIssued: []
+            };
+
+            /**
+             * Start anti-spoofing analysis for a new session
+             */
+            function startSession() {
+                reset();
+                state.sessionStartTime = performance.now();
+                state.isActive = true;
+                console.log('AntiSpoofingModule: Session started');
+            }
+
+            /**
+             * Stop the current session
+             */
+            function stopSession() {
+                state.isActive = false;
+                console.log('AntiSpoofingModule: Session stopped');
+            }
+
+            /**
+             * Reset all tracking data
+             */
+            function reset() {
+                state.positionHistory = [];
+                state.depthHistory = [];
+                state.blinkTimestamps = [];
+                state.lastBlinkTime = null;
+                state.movementHistory = [];
+                state.lastPosition = null;
+                state.landmarkHistory = [];
+                state.scores = {
+                    positionStability: 0,
+                    depthVariance: 0,
+                    blinkPattern: 0,
+                    movementPattern: 0,
+                    overallScore: 0
+                };
+                state.sessionStartTime = null;
+                state.frameCount = 0;
+                state.isActive = false;
+                state.warningsIssued = [];
+            }
+
+            /**
+             * Calculate face center from landmarks
+             */
+            function calculateFaceCenter(landmarks) {
+                // Use nose tip (landmark 1) and face boundary points for center calculation
+                const noseTip = landmarks[1];
+                const leftCheek = landmarks[234];
+                const rightCheek = landmarks[454];
+                const forehead = landmarks[10];
+                const chin = landmarks[152];
+
+                return {
+                    x: (leftCheek.x + rightCheek.x + noseTip.x) / 3,
+                    y: (forehead.y + chin.y + noseTip.y) / 3,
+                    z: noseTip.z
+                };
+            }
+
+            /**
+             * Calculate variance of an array of numbers
+             */
+            function calculateVariance(values) {
+                if (values.length < 2) return 0;
+                const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+                const squaredDiffs = values.map(v => Math.pow(v - mean, 2));
+                return squaredDiffs.reduce((sum, v) => sum + v, 0) / values.length;
+            }
+
+            /**
+             * Analyze face position stability
+             * Photos tend to have extremely stable face positions
+             */
+            function analyzePositionStability() {
+                if (state.positionHistory.length < config.positionHistorySize / 2) {
+                    return 0; // Not enough data
+                }
+
+                const xValues = state.positionHistory.map(p => p.x);
+                const yValues = state.positionHistory.map(p => p.y);
+
+                const xVariance = calculateVariance(xValues);
+                const yVariance = calculateVariance(yValues);
+                const totalVariance = xVariance + yVariance;
+
+                // Too little variance suggests a static image
+                if (totalVariance < config.minPositionVariance) {
+                    return Math.min(1, (config.minPositionVariance - totalVariance) / config.minPositionVariance + 0.5);
+                }
+
+                // Too much variance might indicate erratic movement (unusual)
+                if (totalVariance > config.maxPositionVariance) {
+                    return Math.min(0.3, (totalVariance - config.maxPositionVariance) / config.maxPositionVariance);
+                }
+
+                return 0;
+            }
+
+            /**
+             * Analyze depth variance from z-coordinates
+             * Flat images have very little z-variance over time
+             */
+            function analyzeDepthVariance() {
+                if (state.depthHistory.length < config.depthHistorySize / 2) {
+                    return 0;
+                }
+
+                const variance = calculateVariance(state.depthHistory);
+
+                // Very low depth variance suggests a flat 2D surface
+                if (variance < config.minDepthVariance) {
+                    return Math.min(1, (config.minDepthVariance - variance) / config.minDepthVariance + 0.3);
+                }
+
+                return 0;
+            }
+
+            /**
+             * Analyze blink patterns
+             * Photos don't blink; videos have predictable blink patterns
+             */
+            function analyzeBlinkPattern() {
+                const now = performance.now();
+                const sessionDuration = now - state.sessionStartTime;
+
+                // Need at least 5 seconds of data
+                if (sessionDuration < 5000) {
+                    return 0;
+                }
+
+                // Check if any blinks occurred
+                if (state.blinkTimestamps.length === 0) {
+                    // No blinks in 5+ seconds is suspicious
+                    if (sessionDuration > 10000) {
+                        return 0.8; // Very suspicious
+                    }
+                    return Math.min(0.5, sessionDuration / 20000);
+                }
+
+                // Check blink intervals for regularity (videos have predictable loops)
+                if (state.blinkTimestamps.length >= 3) {
+                    const intervals = [];
+                    for (let i = 1; i < state.blinkTimestamps.length; i++) {
+                        intervals.push(state.blinkTimestamps[i] - state.blinkTimestamps[i - 1]);
+                    }
+
+                    // Check for suspiciously regular intervals (looped video)
+                    const intervalVariance = calculateVariance(intervals);
+                    const meanInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+
+                    // Very regular intervals suggest video loop
+                    if (intervalVariance < 10000 && intervals.length >= 3) {
+                        // Check if intervals are almost identical (within 100ms)
+                        const maxDiff = Math.max(...intervals) - Math.min(...intervals);
+                        if (maxDiff < 200) {
+                            return 0.7; // Suspiciously regular
+                        }
+                    }
+
+                    // Check blink rate
+                    const blinksPerMinute = (state.blinkTimestamps.length / sessionDuration) * 60000;
+                    if (blinksPerMinute < config.naturalBlinkRate.min / 2 ||
+                        blinksPerMinute > config.naturalBlinkRate.max * 2) {
+                        return 0.4; // Unusual blink rate
+                    }
+                }
+
+                return 0;
+            }
+
+            /**
+             * Analyze movement patterns for naturalness
+             * Real faces have subtle micro-movements; replayed videos have mechanical patterns
+             */
+            function analyzeMovementPattern() {
+                if (state.movementHistory.length < config.movementHistorySize / 2) {
+                    return 0;
+                }
+
+                const variance = calculateVariance(state.movementHistory);
+
+                // Too little movement suggests static image
+                if (variance < config.minMovementVariance) {
+                    return Math.min(0.6, (config.minMovementVariance - variance) / config.minMovementVariance + 0.2);
+                }
+
+                // Check for repetitive movement patterns (video loop detection)
+                if (state.movementHistory.length >= 20) {
+                    // Simple pattern detection: check if movement magnitudes repeat
+                    const half = Math.floor(state.movementHistory.length / 2);
+                    const firstHalf = state.movementHistory.slice(0, half);
+                    const secondHalf = state.movementHistory.slice(half, half * 2);
+
+                    let matchCount = 0;
+                    for (let i = 0; i < half; i++) {
+                        if (Math.abs(firstHalf[i] - secondHalf[i]) < 0.001) {
+                            matchCount++;
+                        }
+                    }
+
+                    // If patterns are very similar, might be looped video
+                    if (matchCount / half > 0.8) {
+                        return 0.6;
+                    }
+                }
+
+                return 0;
+            }
+
+            /**
+             * Process a frame of face detection results
+             * Call this every frame during verification
+             */
+            function processFrame(faceResults, blinkResult) {
+                if (!state.isActive) return;
+                if (!faceResults || !faceResults.faceLandmarks || faceResults.faceLandmarks.length === 0) {
+                    return;
+                }
+
+                state.frameCount++;
+                const landmarks = faceResults.faceLandmarks[0];
+                const now = performance.now();
+
+                // Calculate face center
+                const faceCenter = calculateFaceCenter(landmarks);
+
+                // Track position history
+                state.positionHistory.push({ x: faceCenter.x, y: faceCenter.y });
+                if (state.positionHistory.length > config.positionHistorySize) {
+                    state.positionHistory.shift();
+                }
+
+                // Track depth history
+                state.depthHistory.push(faceCenter.z);
+                if (state.depthHistory.length > config.depthHistorySize) {
+                    state.depthHistory.shift();
+                }
+
+                // Track movement
+                if (state.lastPosition) {
+                    const dx = faceCenter.x - state.lastPosition.x;
+                    const dy = faceCenter.y - state.lastPosition.y;
+                    const movement = Math.sqrt(dx * dx + dy * dy);
+                    state.movementHistory.push(movement);
+                    if (state.movementHistory.length > config.movementHistorySize) {
+                        state.movementHistory.shift();
+                    }
+                }
+                state.lastPosition = { x: faceCenter.x, y: faceCenter.y };
+
+                // Track blinks
+                if (blinkResult && blinkResult.isCurrentlyBlinking && !state.lastBlinkTime) {
+                    state.blinkTimestamps.push(now);
+                    state.lastBlinkTime = now;
+                    if (state.blinkTimestamps.length > config.blinkHistorySize) {
+                        state.blinkTimestamps.shift();
+                    }
+                } else if (blinkResult && !blinkResult.isCurrentlyBlinking) {
+                    state.lastBlinkTime = null;
+                }
+
+                // Update suspicion scores periodically (every 10 frames)
+                if (state.frameCount % 10 === 0) {
+                    updateSuspicionScores();
+                }
+            }
+
+            /**
+             * Update all suspicion scores
+             */
+            function updateSuspicionScores() {
+                state.scores.positionStability = analyzePositionStability();
+                state.scores.depthVariance = analyzeDepthVariance();
+                state.scores.blinkPattern = analyzeBlinkPattern();
+                state.scores.movementPattern = analyzeMovementPattern();
+
+                // Calculate overall score (weighted average)
+                state.scores.overallScore = (
+                    state.scores.positionStability * 0.25 +
+                    state.scores.depthVariance * 0.25 +
+                    state.scores.blinkPattern * 0.25 +
+                    state.scores.movementPattern * 0.25
+                );
+            }
+
+            /**
+             * Check if current session appears to be a spoofing attempt
+             * Returns { isSuspicious, score, reasons[] }
+             */
+            function checkForSpoofing() {
+                const reasons = [];
+
+                if (state.scores.positionStability > config.warningThreshold) {
+                    reasons.push('Face position unusually stable');
+                }
+                if (state.scores.depthVariance > config.warningThreshold) {
+                    reasons.push('Insufficient depth variation detected');
+                }
+                if (state.scores.blinkPattern > config.warningThreshold) {
+                    reasons.push('Unusual blink pattern detected');
+                }
+                if (state.scores.movementPattern > config.warningThreshold) {
+                    reasons.push('Movement pattern appears unnatural');
+                }
+
+                return {
+                    isSuspicious: state.scores.overallScore >= config.suspicionThreshold,
+                    isWarning: state.scores.overallScore >= config.warningThreshold,
+                    score: state.scores.overallScore,
+                    reasons: reasons,
+                    scores: { ...state.scores }
+                };
+            }
+
+            /**
+             * Get current anti-spoofing status
+             */
+            function getStatus() {
+                return {
+                    isActive: state.isActive,
+                    frameCount: state.frameCount,
+                    sessionDuration: state.sessionStartTime ? performance.now() - state.sessionStartTime : 0,
+                    blinkCount: state.blinkTimestamps.length,
+                    scores: { ...state.scores },
+                    spoofingCheck: checkForSpoofing()
+                };
+            }
+
+            /**
+             * Update configuration
+             */
+            function setConfig(newConfig) {
+                Object.assign(config, newConfig);
+            }
+
+            /**
+             * Get configuration
+             */
+            function getConfig() {
+                return { ...config };
+            }
+
+            return {
+                startSession,
+                stopSession,
+                reset,
+                processFrame,
+                checkForSpoofing,
+                getStatus,
+                setConfig,
+                getConfig
+            };
+        })();
+
+        // =====================================================
         // CHALLENGE MANAGER MODULE
         // State machine for managing liveness verification challenges
         // States: INITIALIZING → CALIBRATING → PRESENTING → DETECTING → SUCCESS/FAILURE → COMPLETED
@@ -2937,8 +3361,15 @@
                 calibrationDuration: 2000,
                 // Minimum time between state transitions (anti-spoofing)
                 minTransitionDelay: 300,
-                // Presentation delay before detection starts
-                presentationDelay: 1000
+                // Presentation delay before detection starts (base value)
+                presentationDelay: 1000,
+                // Anti-spoofing: Random delay range between challenges (ms)
+                randomDelayMin: 200,
+                randomDelayMax: 800,
+                // Anti-spoofing: Enable continuous spoofing detection
+                enableAntiSpoofing: true,
+                // Anti-spoofing: Check for spoofing every N challenges
+                spoofCheckInterval: 2
             };
 
             // State
@@ -3089,8 +3520,12 @@
             }
 
             /**
-             * Present the current challenge to the user
+             * Generate a random delay for anti-spoofing unpredictability
              */
+            function getRandomDelay() {
+                return config.randomDelayMin + Math.random() * (config.randomDelayMax - config.randomDelayMin);
+            }
+
             function presentCurrentChallenge() {
                 const challenge = state.challenges[state.currentChallengeIndex];
                 if (!challenge) return;
@@ -3119,12 +3554,17 @@
                     ExpressionDetector.reset();
                 }
 
-                // Transition to detecting after presentation delay
+                // Anti-spoofing: Add random delay to base presentation delay
+                // This makes timing unpredictable and harder to spoof with pre-recorded videos
+                const randomDelay = getRandomDelay();
+                const totalDelay = config.presentationDelay + randomDelay;
+
+                // Transition to detecting after presentation delay (with randomized component)
                 setTimeout(() => {
                     if (state.currentState === States.PRESENTING) {
                         transitionTo(States.DETECTING);
                     }
-                }, config.presentationDelay);
+                }, totalDelay);
             }
 
             /**
@@ -3210,6 +3650,16 @@
                     state.currentChallengeIndex++;
 
                     if (state.currentChallengeIndex >= state.challenges.length) {
+                        // Final anti-spoofing check before completing verification
+                        if (config.enableAntiSpoofing) {
+                            const finalCheck = AntiSpoofingModule.checkForSpoofing();
+                            if (finalCheck.isSuspicious) {
+                                console.log('AntiSpoofing: Final check detected suspicious activity', finalCheck);
+                                state.failureReason = 'spoof_detected';
+                                transitionTo(States.FAILURE);
+                                return;
+                            }
+                        }
                         transitionTo(States.COMPLETED);
                     } else {
                         // Add slide animation for challenge panel
@@ -3232,6 +3682,11 @@
             function handleChallengeFailure() {
                 clearInterval(timerInterval);
 
+                // Stop anti-spoofing session on failure
+                if (config.enableAntiSpoofing) {
+                    AntiSpoofingModule.stopSession();
+                }
+
                 const reason = state.failureReason || 'unknown';
                 let message = 'Challenge failed';
 
@@ -3241,6 +3696,9 @@
                         break;
                     case 'face_lost':
                         message = 'Face lost - Keep your face visible';
+                        break;
+                    case 'spoof_detected':
+                        message = 'Verification failed - Please use a live camera';
                         break;
                     default:
                         message = 'Challenge failed - Try again';
@@ -3269,6 +3727,14 @@
              */
             function handleVerificationComplete() {
                 clearInterval(timerInterval);
+
+                // Stop anti-spoofing session on completion
+                if (config.enableAntiSpoofing) {
+                    AntiSpoofingModule.stopSession();
+                    // Log final anti-spoofing status
+                    const status = AntiSpoofingModule.getStatus();
+                    console.log('AntiSpoofing: Final session status', status);
+                }
 
                 // Animate challenge panel out before showing result
                 elements.challengePanel.classList.add('slide-out');
@@ -3317,6 +3783,24 @@
 
                 // Check for face presence
                 const hasFace = faceResults && faceResults.faceLandmarks && faceResults.faceLandmarks.length > 0;
+
+                // Process anti-spoofing analysis
+                if (config.enableAntiSpoofing && hasFace) {
+                    AntiSpoofingModule.processFrame(faceResults, blinkResult);
+
+                    // Check for spoofing at configured intervals
+                    if (state.currentChallengeIndex > 0 &&
+                        state.currentChallengeIndex % config.spoofCheckInterval === 0 &&
+                        state.currentState === States.DETECTING) {
+                        const spoofCheck = AntiSpoofingModule.checkForSpoofing();
+                        if (spoofCheck.isSuspicious) {
+                            console.log('AntiSpoofing: Suspicious activity detected', spoofCheck);
+                            state.failureReason = 'spoof_detected';
+                            transitionTo(States.FAILURE);
+                            return;
+                        }
+                    }
+                }
 
                 switch (state.currentState) {
                     case States.CALIBRATING:
@@ -3432,6 +3916,11 @@
                 HeadMovementDetector.resetCalibration();
                 ExpressionDetector.reset();
 
+                // Start anti-spoofing session
+                if (config.enableAntiSpoofing) {
+                    AntiSpoofingModule.startSession();
+                }
+
                 // Hide result screen, show challenge panel
                 elements.resultScreen.classList.remove('visible');
                 elements.resultScreen.classList.remove('failure');
@@ -3449,6 +3938,12 @@
                 state.isActive = false;
                 state.currentState = States.INITIALIZING;
                 clearInterval(timerInterval);
+
+                // Stop anti-spoofing session
+                if (config.enableAntiSpoofing) {
+                    AntiSpoofingModule.stopSession();
+                }
+
                 console.log('ChallengeManager: Stopped');
             }
 
@@ -3461,6 +3956,11 @@
                 state.completedChallenges = [];
                 state.currentChallengeIndex = 0;
                 state.failureReason = null;
+
+                // Reset anti-spoofing module
+                if (config.enableAntiSpoofing) {
+                    AntiSpoofingModule.reset();
+                }
 
                 // Reset UI
                 elements.resultScreen.classList.remove('visible');
