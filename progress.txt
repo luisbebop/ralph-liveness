@@ -1,0 +1,45 @@
+## Progress Log
+
+### Phase 1: HTML Structure & CSS
+
+#### Task 1: Create responsive HTML layout (video, canvas overlay, UI panels) - COMPLETED
+- Created index.html with full responsive layout
+- Added video element with mirrored display (scaleX(-1))
+- Added canvas overlay for face mesh visualization
+- Added face guide oval overlay with state classes (detected, warning)
+- Added status overlay for real-time feedback
+- Added challenge panel with:
+  - Challenge header (number and timer)
+  - Challenge instruction area (icon, name, hint)
+  - Progress bar for hold detection
+  - 4 progress indicators for challenge completion
+- Added control button and result screen
+- Styled with CSS variables for theming
+- Used flexbox for responsive layout
+- Added loading spinner animation
+- Mobile-responsive with media queries
+- Commit: 3a3dec9
+
+#### Task 2: Style with CSS variables, flexbox, animations - COMPLETED (in Task 1)
+- CSS variables already implemented in Task 1
+- Flexbox layout already implemented in Task 1
+- Animations (spinner) already implemented in Task 1
+
+#### Task 3: Add face position guide (oval overlay) - COMPLETED (in Task 1)
+- Face guide oval overlay already implemented in Task 1
+- State classes (detected, warning) already implemented
+
+### Phase 2: MediaPipe Integration
+
+#### Task 4: Load FaceLandmarker from CDN with GPU delegate - COMPLETED
+- Added MediaPipe Tasks Vision CDN (v0.10.3)
+- Implemented initializeFaceLandmarker() with GPU delegate
+- Configured FaceLandmarker options:
+  - runningMode: 'VIDEO' for real-time processing
+  - numFaces: 1 (single face detection)
+  - outputFaceBlendshapes: true (for expression detection)
+  - outputFacialTransformationMatrixes: true (for head pose)
+- Added CPU fallback if GPU initialization fails
+- Added status update and error handling functions
+- Button disabled until model loads successfully
+- Commit: 98e2401
