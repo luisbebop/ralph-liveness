@@ -791,6 +791,9 @@
             // Process blink detection
             const blinkResult = BlinkDetector.processFrame(results);
 
+            // Process head movement detection
+            const headResult = HeadMovementDetector.processFrame(results);
+
             // Check if a face was detected
             if (results && results.faceLandmarks && results.faceLandmarks.length > 0) {
                 const landmarks = results.faceLandmarks[0];
@@ -812,9 +815,12 @@
                     elements.faceGuide.classList.remove('detected');
                     updateStatus(facePosition.message);
                 } else {
-                    // Show EAR value for debugging/feedback
+                    // Show EAR and head angle values for debugging/feedback
                     const earDisplay = blinkResult.ear.average.toFixed(2);
-                    updateStatus(`Face detected - Ready (EAR: ${earDisplay})`);
+                    const yawDisplay = headResult.yawFromBaseline.toFixed(1);
+                    const pitchDisplay = headResult.pitchFromBaseline.toFixed(1);
+                    const calibStatus = headResult.isCalibrated ? '' : ' (calibrating...)';
+                    updateStatus(`EAR: ${earDisplay} | Yaw: ${yawDisplay}° | Pitch: ${pitchDisplay}°${calibStatus}`);
                 }
 
                 // Draw face landmarks on canvas (mirrored to match video)
@@ -1290,6 +1296,438 @@
                 getCurrentEAR,
                 getCurrentBlendshapes,
                 isCurrentlyBlinking,
+                setConfig,
+                getConfig
+            };
+        })();
+
+        // =====================================================
+        // HEAD MOVEMENT DETECTOR MODULE
+        // Detects head yaw (left/right) and pitch (up/down) movements
+        // Uses nose tip position relative to eye positions for calculation
+        // =====================================================
+
+        const HeadMovementDetector = (function() {
+            // Configuration
+            const config = {
+                // Yaw threshold in degrees - head must turn this much from baseline
+                yawThreshold: 15,
+                // Pitch threshold in degrees - head must tilt this much from baseline
+                pitchThreshold: 12,
+                // Hold duration required in milliseconds
+                holdDuration: 500,
+                // Smoothing factor for angle calculations (0-1, higher = more smoothing)
+                smoothingFactor: 0.3,
+                // Number of frames to establish baseline
+                calibrationFrames: 30,
+                // Maximum allowed deviation during hold (degrees)
+                holdTolerance: 5
+            };
+
+            // State
+            let state = {
+                // Baseline values (established during calibration)
+                baseline: {
+                    yaw: 0,
+                    pitch: 0,
+                    isCalibrated: false,
+                    calibrationSamples: []
+                },
+                // Current smoothed values
+                currentYaw: 0,
+                currentPitch: 0,
+                // Raw values (before smoothing)
+                rawYaw: 0,
+                rawPitch: 0,
+                // Hold tracking
+                holdStartTime: null,
+                holdDirection: null, // 'left', 'right', 'up', 'down'
+                holdProgress: 0,
+                // Detection results
+                lastDetectedMovement: null,
+                movementHistory: []
+            };
+
+            // Key landmark indices for head pose estimation
+            const landmarks = {
+                noseTip: 1,
+                noseBridge: 6,
+                leftEyeInner: 133,
+                leftEyeOuter: 33,
+                rightEyeInner: 362,
+                rightEyeOuter: 263,
+                leftEyeCenter: 468,  // Iris center (if available)
+                rightEyeCenter: 473, // Iris center (if available)
+                foreheadCenter: 10,
+                chin: 152
+            };
+
+            /**
+             * Calculate yaw angle (left/right rotation) from landmarks
+             * Uses the horizontal offset of nose tip relative to eye midpoint
+             */
+            function calculateYaw(faceLandmarks) {
+                const noseTip = faceLandmarks[landmarks.noseTip];
+                const leftEye = faceLandmarks[landmarks.leftEyeInner];
+                const rightEye = faceLandmarks[landmarks.rightEyeInner];
+
+                // Calculate eye midpoint
+                const eyeMidpoint = {
+                    x: (leftEye.x + rightEye.x) / 2,
+                    y: (leftEye.y + rightEye.y) / 2,
+                    z: ((leftEye.z || 0) + (rightEye.z || 0)) / 2
+                };
+
+                // Calculate eye width for normalization
+                const eyeWidth = Math.abs(leftEye.x - rightEye.x);
+                if (eyeWidth === 0) return 0;
+
+                // Calculate horizontal offset of nose from eye midpoint
+                const noseOffset = noseTip.x - eyeMidpoint.x;
+
+                // Normalize by eye width and convert to approximate degrees
+                // A rough approximation: full eye width offset ≈ 45 degrees
+                const normalizedOffset = noseOffset / eyeWidth;
+                const yawDegrees = normalizedOffset * 45;
+
+                // Also factor in z-depth difference if available
+                const depthDiff = (noseTip.z || 0) - eyeMidpoint.z;
+                const depthFactor = depthDiff * 30; // Add depth contribution
+
+                return yawDegrees + depthFactor;
+            }
+
+            /**
+             * Calculate pitch angle (up/down tilt) from landmarks
+             * Uses vertical positioning of nose tip relative to eyes and forehead
+             */
+            function calculatePitch(faceLandmarks) {
+                const noseTip = faceLandmarks[landmarks.noseTip];
+                const noseBridge = faceLandmarks[landmarks.noseBridge];
+                const forehead = faceLandmarks[landmarks.foreheadCenter];
+                const chin = faceLandmarks[landmarks.chin];
+
+                // Calculate face height for normalization
+                const faceHeight = Math.abs(forehead.y - chin.y);
+                if (faceHeight === 0) return 0;
+
+                // Calculate the vertical ratio of nose tip position
+                // between nose bridge and chin
+                const noseVerticalRange = chin.y - noseBridge.y;
+                if (noseVerticalRange === 0) return 0;
+
+                const nosePosition = (noseTip.y - noseBridge.y) / noseVerticalRange;
+
+                // Expected position is around 0.5 when looking straight
+                // Higher value = looking down, Lower value = looking up
+                const expectedPosition = 0.5;
+                const deviation = nosePosition - expectedPosition;
+
+                // Convert to approximate degrees (full range ≈ 60 degrees)
+                let pitchDegrees = deviation * 60;
+
+                // Also use z-depth as additional signal
+                const zDiff = (noseTip.z || 0) - (noseBridge.z || 0);
+                // When looking down, nose tip z increases relative to bridge
+                pitchDegrees += zDiff * 20;
+
+                return pitchDegrees;
+            }
+
+            /**
+             * Apply exponential smoothing to reduce noise
+             */
+            function smoothValue(currentSmoothed, newRaw, factor) {
+                return currentSmoothed * (1 - factor) + newRaw * factor;
+            }
+
+            /**
+             * Determine which direction the head is turned/tilted
+             */
+            function getMovementDirection(yaw, pitch, baseline) {
+                const yawDelta = yaw - baseline.yaw;
+                const pitchDelta = pitch - baseline.pitch;
+
+                // Check yaw (left/right)
+                if (Math.abs(yawDelta) >= config.yawThreshold) {
+                    // Positive yaw = turned right (nose points to viewer's left due to mirroring)
+                    return yawDelta > 0 ? 'right' : 'left';
+                }
+
+                // Check pitch (up/down)
+                if (Math.abs(pitchDelta) >= config.pitchThreshold) {
+                    // Positive pitch = looking down
+                    return pitchDelta > 0 ? 'down' : 'up';
+                }
+
+                return null;
+            }
+
+            /**
+             * Check if the current angle is within tolerance of the hold angle
+             */
+            function isHoldingPosition(currentDirection, yaw, pitch, baseline) {
+                const yawDelta = yaw - baseline.yaw;
+                const pitchDelta = pitch - baseline.pitch;
+
+                switch (currentDirection) {
+                    case 'left':
+                        return yawDelta <= -config.yawThreshold + config.holdTolerance;
+                    case 'right':
+                        return yawDelta >= config.yawThreshold - config.holdTolerance;
+                    case 'up':
+                        return pitchDelta <= -config.pitchThreshold + config.holdTolerance;
+                    case 'down':
+                        return pitchDelta >= config.pitchThreshold - config.holdTolerance;
+                    default:
+                        return false;
+                }
+            }
+
+            /**
+             * Process a frame and detect head movements
+             * @param {Object} faceResults - Results from FaceLandmarker.detectForVideo()
+             * @returns {Object} Detection result with movement status and metrics
+             */
+            function processFrame(faceResults) {
+                const now = performance.now();
+
+                // Default result
+                const result = {
+                    isCalibrated: state.baseline.isCalibrated,
+                    currentYaw: state.currentYaw,
+                    currentPitch: state.currentPitch,
+                    yawFromBaseline: 0,
+                    pitchFromBaseline: 0,
+                    direction: null,
+                    isHolding: false,
+                    holdProgress: 0,
+                    movementDetected: false,
+                    detectedDirection: null
+                };
+
+                // Check if we have valid face data
+                if (!faceResults || !faceResults.faceLandmarks || faceResults.faceLandmarks.length === 0) {
+                    // Reset hold state when no face detected
+                    state.holdStartTime = null;
+                    state.holdDirection = null;
+                    state.holdProgress = 0;
+                    return result;
+                }
+
+                const faceLandmarks = faceResults.faceLandmarks[0];
+
+                // Calculate raw yaw and pitch
+                state.rawYaw = calculateYaw(faceLandmarks);
+                state.rawPitch = calculatePitch(faceLandmarks);
+
+                // Apply smoothing
+                state.currentYaw = smoothValue(state.currentYaw, state.rawYaw, config.smoothingFactor);
+                state.currentPitch = smoothValue(state.currentPitch, state.rawPitch, config.smoothingFactor);
+
+                result.currentYaw = state.currentYaw;
+                result.currentPitch = state.currentPitch;
+
+                // Handle calibration
+                if (!state.baseline.isCalibrated) {
+                    state.baseline.calibrationSamples.push({
+                        yaw: state.currentYaw,
+                        pitch: state.currentPitch
+                    });
+
+                    if (state.baseline.calibrationSamples.length >= config.calibrationFrames) {
+                        // Calculate average baseline from samples
+                        const samples = state.baseline.calibrationSamples;
+                        state.baseline.yaw = samples.reduce((sum, s) => sum + s.yaw, 0) / samples.length;
+                        state.baseline.pitch = samples.reduce((sum, s) => sum + s.pitch, 0) / samples.length;
+                        state.baseline.isCalibrated = true;
+                        console.log(`HeadMovementDetector calibrated - Baseline: yaw=${state.baseline.yaw.toFixed(1)}°, pitch=${state.baseline.pitch.toFixed(1)}°`);
+                    }
+
+                    result.isCalibrated = state.baseline.isCalibrated;
+                    return result;
+                }
+
+                // Calculate deltas from baseline
+                result.yawFromBaseline = state.currentYaw - state.baseline.yaw;
+                result.pitchFromBaseline = state.currentPitch - state.baseline.pitch;
+                result.isCalibrated = true;
+
+                // Determine current movement direction
+                const direction = getMovementDirection(state.currentYaw, state.currentPitch, state.baseline);
+                result.direction = direction;
+
+                // Handle hold detection
+                if (direction) {
+                    if (state.holdDirection === direction) {
+                        // Continue holding same direction
+                        if (isHoldingPosition(direction, state.currentYaw, state.currentPitch, state.baseline)) {
+                            const holdTime = now - state.holdStartTime;
+                            state.holdProgress = Math.min(holdTime / config.holdDuration, 1);
+                            result.holdProgress = state.holdProgress;
+                            result.isHolding = true;
+
+                            // Check if hold is complete
+                            if (holdTime >= config.holdDuration) {
+                                result.movementDetected = true;
+                                result.detectedDirection = direction;
+                                state.lastDetectedMovement = direction;
+                                state.movementHistory.push({
+                                    direction: direction,
+                                    timestamp: now
+                                });
+                                console.log(`Head movement detected: ${direction} (held for ${config.holdDuration}ms)`);
+
+                                // Reset hold to allow detecting again
+                                state.holdStartTime = null;
+                                state.holdDirection = null;
+                                state.holdProgress = 0;
+                            }
+                        } else {
+                            // Position drifted out of tolerance - reset
+                            state.holdStartTime = now;
+                            state.holdProgress = 0;
+                        }
+                    } else {
+                        // New direction - start new hold
+                        state.holdDirection = direction;
+                        state.holdStartTime = now;
+                        state.holdProgress = 0;
+                    }
+                } else {
+                    // No significant movement - reset hold state
+                    state.holdStartTime = null;
+                    state.holdDirection = null;
+                    state.holdProgress = 0;
+                }
+
+                return result;
+            }
+
+            /**
+             * Reset the detector state (but keep calibration)
+             */
+            function reset() {
+                state.holdStartTime = null;
+                state.holdDirection = null;
+                state.holdProgress = 0;
+                state.lastDetectedMovement = null;
+                state.movementHistory = [];
+                console.log('HeadMovementDetector reset (calibration preserved)');
+            }
+
+            /**
+             * Full reset including calibration
+             */
+            function resetCalibration() {
+                state = {
+                    baseline: {
+                        yaw: 0,
+                        pitch: 0,
+                        isCalibrated: false,
+                        calibrationSamples: []
+                    },
+                    currentYaw: 0,
+                    currentPitch: 0,
+                    rawYaw: 0,
+                    rawPitch: 0,
+                    holdStartTime: null,
+                    holdDirection: null,
+                    holdProgress: 0,
+                    lastDetectedMovement: null,
+                    movementHistory: []
+                };
+                console.log('HeadMovementDetector full reset (calibration cleared)');
+            }
+
+            /**
+             * Manually set baseline to current position
+             */
+            function calibrate() {
+                state.baseline.yaw = state.currentYaw;
+                state.baseline.pitch = state.currentPitch;
+                state.baseline.isCalibrated = true;
+                state.baseline.calibrationSamples = [];
+                console.log(`HeadMovementDetector manually calibrated - yaw=${state.baseline.yaw.toFixed(1)}°, pitch=${state.baseline.pitch.toFixed(1)}°`);
+            }
+
+            /**
+             * Check if calibration is complete
+             */
+            function isCalibrated() {
+                return state.baseline.isCalibrated;
+            }
+
+            /**
+             * Get current yaw and pitch values
+             */
+            function getCurrentAngles() {
+                return {
+                    yaw: state.currentYaw,
+                    pitch: state.currentPitch,
+                    yawFromBaseline: state.currentYaw - state.baseline.yaw,
+                    pitchFromBaseline: state.currentPitch - state.baseline.pitch
+                };
+            }
+
+            /**
+             * Get the baseline values
+             */
+            function getBaseline() {
+                return {
+                    yaw: state.baseline.yaw,
+                    pitch: state.baseline.pitch,
+                    isCalibrated: state.baseline.isCalibrated
+                };
+            }
+
+            /**
+             * Get current hold progress (0-1)
+             */
+            function getHoldProgress() {
+                return state.holdProgress;
+            }
+
+            /**
+             * Get the current hold direction
+             */
+            function getHoldDirection() {
+                return state.holdDirection;
+            }
+
+            /**
+             * Get movement history
+             */
+            function getMovementHistory() {
+                return [...state.movementHistory];
+            }
+
+            /**
+             * Update configuration
+             */
+            function setConfig(newConfig) {
+                Object.assign(config, newConfig);
+            }
+
+            /**
+             * Get current configuration
+             */
+            function getConfig() {
+                return { ...config };
+            }
+
+            // Public API
+            return {
+                processFrame,
+                reset,
+                resetCalibration,
+                calibrate,
+                isCalibrated,
+                getCurrentAngles,
+                getBaseline,
+                getHoldProgress,
+                getHoldDirection,
+                getMovementHistory,
                 setConfig,
                 getConfig
             };
