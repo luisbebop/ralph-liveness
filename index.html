@@ -372,6 +372,140 @@
             }
         }
 
+        /* Success/Failure Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes successPulse {
+            0% {
+                transform: scale(0);
+                opacity: 0;
+            }
+            50% {
+                transform: scale(1.2);
+            }
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        @keyframes failureShake {
+            0%, 100% {
+                transform: translateX(0);
+            }
+            10%, 30%, 50%, 70%, 90% {
+                transform: translateX(-8px);
+            }
+            20%, 40%, 60%, 80% {
+                transform: translateX(8px);
+            }
+        }
+
+        @keyframes checkmarkPop {
+            0% {
+                transform: scale(0);
+            }
+            50% {
+                transform: scale(1.3);
+            }
+            100% {
+                transform: scale(1);
+            }
+        }
+
+        @keyframes progressComplete {
+            0% {
+                background: var(--primary-color);
+            }
+            50% {
+                background: var(--success-color);
+                box-shadow: 0 0 20px rgba(76, 175, 80, 0.5);
+            }
+            100% {
+                background: var(--success-color);
+            }
+        }
+
+        @keyframes glowPulse {
+            0%, 100% {
+                box-shadow: 0 0 5px rgba(76, 175, 80, 0.3);
+            }
+            50% {
+                box-shadow: 0 0 20px rgba(76, 175, 80, 0.6);
+            }
+        }
+
+        /* Result screen animations */
+        .result-screen.visible {
+            display: block;
+            animation: fadeInUp 0.5s ease-out;
+        }
+
+        .result-screen.visible .result-icon {
+            animation: successPulse 0.6s ease-out 0.2s both;
+        }
+
+        .result-screen.visible .result-title {
+            animation: fadeInUp 0.4s ease-out 0.4s both;
+        }
+
+        .result-screen.visible .result-message {
+            animation: fadeInUp 0.4s ease-out 0.5s both;
+        }
+
+        .result-screen.visible .control-btn {
+            animation: fadeInUp 0.4s ease-out 0.6s both;
+        }
+
+        /* Failure-specific animations */
+        .result-screen.failure.visible .result-icon {
+            animation: failureShake 0.6s ease-out 0.2s both;
+        }
+
+        /* Indicator animations */
+        .indicator.completing {
+            animation: checkmarkPop 0.4s ease-out;
+        }
+
+        .indicator.completed {
+            animation: glowPulse 2s ease-in-out infinite;
+        }
+
+        /* Progress bar success animation */
+        .progress-fill.completing {
+            animation: progressComplete 0.5s ease-out forwards;
+        }
+
+        /* Face guide success glow */
+        .face-guide.success-glow {
+            animation: glowPulse 1s ease-in-out;
+            border-color: var(--success-color);
+            box-shadow: 0 0 30px rgba(76, 175, 80, 0.4);
+        }
+
+        /* Challenge panel slide animations */
+        .challenge-panel {
+            transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+        }
+
+        .challenge-panel.slide-out {
+            transform: translateY(-20px);
+            opacity: 0;
+        }
+
+        .challenge-panel.slide-in {
+            animation: fadeInUp 0.3s ease-out;
+        }
+
         /* Hidden utility class */
         .hidden {
             display: none !important;
@@ -2546,25 +2680,46 @@
                 const challenge = state.challenges[state.currentChallengeIndex];
                 state.completedChallenges.push(challenge);
 
-                // Update UI to show success
-                elements.faceGuide.classList.add('detected');
+                // Update UI to show success with animations
+                elements.faceGuide.classList.add('detected', 'success-glow');
                 elements.faceGuide.classList.remove('warning');
                 elements.progressFill.style.width = '100%';
+                elements.progressFill.classList.add('completing');
                 elements.holdPercent.textContent = '100%';
                 updateStatus('Challenge completed!');
 
-                // Mark indicator as completed
-                elements.indicators[state.currentChallengeIndex].classList.add('completed');
-                elements.indicators[state.currentChallengeIndex].classList.remove('active');
+                // Mark indicator as completed with animation
+                const currentIndicator = elements.indicators[state.currentChallengeIndex];
+                currentIndicator.classList.add('completing');
+                currentIndicator.classList.remove('active');
+
+                // After animation, set completed state
+                setTimeout(() => {
+                    currentIndicator.classList.remove('completing');
+                    currentIndicator.classList.add('completed');
+                }, 400);
 
                 // Move to next challenge or complete
                 setTimeout(() => {
+                    // Clean up animation classes
+                    elements.faceGuide.classList.remove('success-glow');
+                    elements.progressFill.classList.remove('completing');
+
                     state.currentChallengeIndex++;
 
                     if (state.currentChallengeIndex >= state.challenges.length) {
                         transitionTo(States.COMPLETED);
                     } else {
-                        transitionTo(States.PRESENTING);
+                        // Add slide animation for challenge panel
+                        elements.challengePanel.classList.add('slide-out');
+                        setTimeout(() => {
+                            transitionTo(States.PRESENTING);
+                            elements.challengePanel.classList.remove('slide-out');
+                            elements.challengePanel.classList.add('slide-in');
+                            setTimeout(() => {
+                                elements.challengePanel.classList.remove('slide-in');
+                            }, 300);
+                        }, 300);
                     }
                 }, config.successDisplayDuration);
             }
@@ -2613,24 +2768,31 @@
             function handleVerificationComplete() {
                 clearInterval(timerInterval);
 
-                // Update UI to show success
-                elements.resultScreen.classList.add('visible');
-                elements.resultScreen.classList.remove('failure');
-                elements.resultIcon.textContent = '✓';
-                elements.resultTitle.textContent = 'Verification Complete';
-                elements.resultMessage.textContent = 'You have been verified as a real person.';
+                // Animate challenge panel out before showing result
+                elements.challengePanel.classList.add('slide-out');
 
-                // Hide challenge panel and control button
-                elements.challengePanel.classList.add('hidden');
-                elements.controlBtn.classList.add('hidden');
+                setTimeout(() => {
+                    // Hide challenge panel and control button
+                    elements.challengePanel.classList.add('hidden');
+                    elements.challengePanel.classList.remove('slide-out');
+                    elements.controlBtn.classList.add('hidden');
 
-                updateStatus('Verification successful!');
-                elements.faceGuide.classList.add('detected');
-                elements.faceGuide.classList.remove('warning');
+                    // Update UI to show success with animation
+                    elements.resultScreen.classList.remove('failure');
+                    elements.resultScreen.classList.add('visible');
+                    elements.resultIcon.textContent = '✓';
+                    elements.resultTitle.textContent = 'Verification Complete';
+                    elements.resultMessage.textContent = 'You have been verified as a real person.';
+
+                    // Add success glow to face guide
+                    elements.faceGuide.classList.add('detected', 'success-glow');
+                    elements.faceGuide.classList.remove('warning');
+
+                    updateStatus('Verification successful!');
+                    console.log('Verification completed successfully!');
+                }, 300);
 
                 state.isActive = false;
-
-                console.log('Verification completed successfully!');
             }
 
             /**
@@ -2802,8 +2964,16 @@
                 elements.resultScreen.classList.remove('visible');
                 elements.resultScreen.classList.remove('failure');
                 elements.challengePanel.classList.remove('hidden');
+                elements.challengePanel.classList.remove('slide-out', 'slide-in');
                 elements.controlBtn.classList.remove('hidden');
                 elements.controlBtn.disabled = false;
+
+                // Clean up animation classes
+                elements.faceGuide.classList.remove('success-glow');
+                elements.progressFill.classList.remove('completing');
+                elements.indicators.forEach(indicator => {
+                    indicator.classList.remove('completing', 'completed', 'active');
+                });
 
                 updateProgressIndicators();
                 console.log('ChallengeManager: Reset');
