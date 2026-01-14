@@ -43,3 +43,45 @@
 - Added status update and error handling functions
 - Button disabled until model loads successfully
 - Commit: 98e2401
+
+#### Task 5: Set up WebRTC camera (getUserMedia, mirrored view) - COMPLETED
+- Implemented initializeCamera() with getUserMedia API
+- Configured video constraints:
+  - width: ideal 640, max 1280
+  - height: ideal 480, max 720
+  - facingMode: 'user' (front-facing camera)
+  - frameRate: ideal 30, max 60
+- Added initializeCameraBasic() fallback for OverconstrainedError
+- Set canvas dimensions to match video dimensions
+- Video element already has CSS transform: scaleX(-1) for mirrored view
+- Added comprehensive error handling for camera access:
+  - NotAllowedError/PermissionDeniedError
+  - NotFoundError/DevicesNotFoundError
+  - NotReadableError/TrackStartError
+  - OverconstrainedError (triggers basic fallback)
+- Added stopCamera() to release resources
+- Added helper functions: isCameraInitialized(), isAppReady(), checkAndEnableStartButton()
+- Camera and model now initialize in parallel for faster startup
+- Commit: d9cf483
+
+#### Task 6: Create detection loop with requestAnimationFrame - COMPLETED
+- Implemented detectionLoop() using requestAnimationFrame for continuous frame processing
+- Added processDetectionResults() to handle face detection output:
+  - Updates face guide state (detected/warning classes)
+  - Provides real-time positioning feedback
+- Implemented checkFacePosition() for face positioning validation:
+  - Checks horizontal and vertical centering (within 15% tolerance)
+  - Validates face size (25%-75% of frame)
+  - Returns guidance messages (move left/right/up/down/closer/further)
+- Created drawFaceLandmarks() for face mesh visualization:
+  - Draws face oval, eye, and lip contours
+  - Mirrors canvas to match mirrored video
+  - Highlights key facial feature points
+- Added detection loop control functions:
+  - startDetectionLoop() - starts requestAnimationFrame loop
+  - stopDetectionLoop() - cancels animation and clears canvas
+  - getCurrentFaceResults() - exposes results for other modules
+  - isDetectionActive() - check if loop is running
+- Detection loop starts automatically after initialization
+- Added control button and retry button event handlers
+- Commit: f469c7f
