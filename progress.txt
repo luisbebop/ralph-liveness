@@ -365,3 +365,13 @@
   - Head movements now register much faster (response time reduced by ~50%)
   - Users can retry the current challenge without losing progress on completed challenges
 - Commit: 4b27174
+
+### Documentation
+
+#### README update - COMPLETED
+- Replaced Ralph Wiggum framework documentation with liveness detection project documentation
+- Added sections: Features, Technology Stack, Quick Start, How It Works, Browser Support, Development
+- Documented all challenge types with thresholds
+- Listed anti-spoofing measures
+- Described the modular architecture (BlinkDetector, HeadMovementDetector, etc.)
+- Commit: 51db20b
