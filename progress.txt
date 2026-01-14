@@ -149,3 +149,40 @@
 - Status display now shows expression percentages (Smile/Mouth/Brow) for debugging
 - Public API: processFrame(), reset(), getCurrentValues(), getBlendshapeScores(), getHoldProgress(), isExpressionCurrentlyActive(), isHolding(), getDetectionHistory(), setConfig(), getConfig()
 - Commit: e8706fe
+
+### Phase 4: Challenge State Machine
+
+#### Task 10: States: INITIALIZING → CALIBRATING → PRESENTING → DETECTING → SUCCESS/FAILURE → COMPLETED - COMPLETED
+- Implemented ChallengeManager as an IIFE module (same pattern as detection modules)
+- Defined state machine with 7 states:
+  - INITIALIZING: Initial state before verification starts
+  - CALIBRATING: Collecting baseline head position data (2 seconds)
+  - PRESENTING: Displaying challenge instructions to user (1 second)
+  - DETECTING: Actively monitoring for challenge completion (5 second timeout)
+  - SUCCESS: Challenge completed successfully (0.8 second display)
+  - FAILURE: Challenge failed (timeout or face lost)
+  - COMPLETED: All 4 challenges passed successfully
+- Defined 8 challenge types:
+  - Blink: Requires 2 blinks
+  - Turn Head Left/Right: 15° yaw threshold, 500ms hold
+  - Look Up/Down: 12° pitch threshold, 500ms hold
+  - Smile: > 0.4 blendshape, 500ms hold
+  - Open Mouth: > 0.3 blendshape, 500ms hold
+  - Raise Eyebrows: > 0.3 blendshape, 500ms hold
+- Implemented random challenge generation with variety enforcement:
+  - No two consecutive challenges use same detector type (unless different direction/expression)
+  - Each challenge type used only once per session
+- Added state transition logic with anti-spoofing:
+  - Minimum 300ms delay between state transitions
+  - Face presence validation during detection
+  - Grace period (500ms) before failing on face loss
+- Integrated with detection modules:
+  - ChallengeManager.processFrame() called from main detection loop
+  - Processes blinkResult, headResult, expressionResult each frame
+- Added timer countdown display (updates every 100ms)
+- Added progress bar updates for hold challenges
+- Added success/failure result screens with appropriate styling
+- Updated control button to start verification via ChallengeManager.start()
+- Updated retry button to reset via ChallengeManager.reset()
+- Public API: States, ChallengeTypes, start(), stop(), reset(), processFrame(), isActive(), getCurrentState(), getCurrentChallenge(), getProgress(), setConfig(), getConfig()
+- Commit: 74aeb77
