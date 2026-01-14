@@ -1,69 +1,77 @@
-# Ralph Wiggum, Senior Software Engineer 🧑‍💻
+# Liveness Detection App
 
-Meet Ralph Wiggum — Senior Software Engineer, 15+ years of experience, expert in cloud-native paste-eating architectures, former Staff Engineer at Crayons.io, and current holder of the world record for "most consecutive all-nighters without ever asking for a promotion."
+A single-page web application that verifies a real human is present using active challenges (blink, head movement, facial expressions) with MediaPipe Face Mesh for detection.
 
-While real senior devs are busy:
-- Writing 47-page design docs nobody reads
-- Arguing about dependency injection in Slack
-- Quietly pushing `console.log("works on my machine")` to production
-- Demanding bonus and unlimited PTO
+## Features
 
-Ralph just **loops**.  
-Fail → fix → fail → fix → commit → repeat.  
-No ego. No standups. No "let me circle back on that."  
-Just pure, adorable, unstoppable persistence powered by Claude and a couple of bash scripts.
+- **Blink Detection** - Eye Aspect Ratio (EAR) + blendshapes
+- **Head Movement** - Turn left/right, look up/down (pose estimation)
+- **Facial Expressions** - Smile, open mouth, raise eyebrows
+- **Random Challenges** - 4 challenges selected randomly per session
+- **Anti-Spoofing** - Multiple measures to prevent photo/video attacks
 
-This is the **original external Ralph Loop** — the one that keeps sessions fresh, avoids context drift, and turns your AI into a gremlin that codes while you sleep. Because why pay a senior six figures when Ralph will do it for API credits and a gold star?
+## Technology Stack
 
-![Ralph Wiggum, Senior Software Engineer](ralph.png)
+- Single HTML file with inline CSS and JavaScript
+- **MediaPipe FaceLandmarker** - 478 facial landmarks + 52 blendshapes
+- **WebRTC** for camera access
+- No server required - runs entirely in the browser
 
-## What's Inside?
+## Quick Start
 
-- **`gen-prd.sh`** – Ralph writes a beautiful PRD (usually better than the ones from your last architecture review).
-- **`PRD.md`** – The single source of truth. Ralph treats it like his Valentine from Lisa.
-- **`progress.txt`** – Ralph's little diary: "Today I made the button work. I'm special!"
-- **`ralph-once.sh`** – Do exactly one task. Perfect for watching Ralph think.
-- **`ralph-afk.sh`** – Fire and forget. Give it a number and go touch grass. Ralph doesn't need breaks.
+1. Open `index.html` in a modern browser (Chrome, Firefox, Safari)
+2. Grant camera permission when prompted
+3. Position your face in the oval guide
+4. Complete 4 random challenges
+5. Get verification result
 
-## Quick Start (Example: Minimal Craigslist Clone)
+## How It Works
 
-1. Make sure you have the Claude CLI installed and an API key.
-2. Generate the PRD:
-   ```bash
-   ./gen-prd.sh
-   ```
-   (Edit the prompt inside for your own project — Ralph is very flexible.)
+### Challenge Types
 
-3. Try one step (babysitting mode):
-   ```bash
-   ./ralph-once.sh
-   ```
-   Watch Ralph pick a task, implement it, commit, and update progress.
+| Challenge | Detection Method | Threshold |
+|-----------|-----------------|-----------|
+| Blink | EAR < 0.21 or blendshape > 0.5 | 2+ blinks |
+| Head turn left/right | 10° yaw from baseline | Hold 500ms |
+| Head tilt up/down | 8° pitch from baseline | Hold 500ms |
+| Smile | blendshape > 0.4 | Hold 500ms |
+| Open mouth | blendshape > 0.3 | Hold 500ms |
+| Raise eyebrows | blendshape > 0.3 | Hold 500ms |
 
-4. Go full Ralph (AFK mode):
-   ```bash
-   ./ralph-afk.sh 50
-   ```
-   Come back later to a (hopefully) finished app. If Ralph says `<promise>COMPLETE</promise>`, he's done!
+### Anti-Spoofing Measures
 
-## Tips for Maximum Ralph
+- Random challenge order each session
+- Unpredictable timing between challenges
+- Multiple detection types combined
+- Hold duration requirements
+- Continuous face presence validation
+- 3D depth variance analysis
+- Movement pattern analysis
 
-- Write a rock-solid PRD first. Chat with Claude normally, then paste the final version.
-- Keep tasks tiny and testable — that's how Ralph stays on track.
-- Watch the first few runs with `ralph-once.sh`. If Ralph starts writing placeholder code, gently remind him in the PRD.
-- Use `git log` to see Ralph's heroic journey.
-- Unlike certain senior engineers, Ralph actually reads the error messages.
+## Browser Support
 
-Ralph may not be the smartest dev on the block, but he **never gives up**.  
-And honestly? That's more than you can say for half the staff+ titles out there.
+- Chrome (recommended)
+- Firefox
+- Safari
+- Edge
 
-Happy looping! 🎉
+Requires WebGL support for GPU-accelerated face detection.
+
+## Development
+
+The application is contained in a single `index.html` file with:
+
+- **BlinkDetector** - EAR calculation + blendshape detection
+- **HeadMovementDetector** - Yaw/pitch estimation with auto-calibration
+- **ExpressionDetector** - Smile, mouth open, eyebrow detection
+- **ChallengeManager** - State machine for verification flow
+- **AntiSpoofingModule** - Multiple spoofing detection methods
 
 ## License
 
 MIT License
 
-Copyright (c) 2026 luisbebop
+Copyright (c) 2025
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
