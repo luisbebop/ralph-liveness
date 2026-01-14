@@ -130,3 +130,22 @@
 - Status display now shows yaw and pitch values for debugging
 - Public API: processFrame(), reset(), resetCalibration(), calibrate(), isCalibrated(), getCurrentAngles(), getBaseline(), getHoldProgress(), getHoldDirection(), getMovementHistory(), setConfig(), getConfig()
 - Commit: 89baa8e
+
+#### Task 9: ExpressionDetector - Smile, mouth open, eyebrow raise via blendshapes - COMPLETED
+- Implemented ExpressionDetector as an IIFE module (same pattern as BlinkDetector and HeadMovementDetector)
+- Uses MediaPipe blendshapes for expression detection:
+  - Smile: mouthSmileLeft + mouthSmileRight (averaged)
+  - Mouth open: jawOpen blendshape
+  - Eyebrow raise: browInnerUp (50% weight) + browOuterUpLeft/Right (25% each)
+- Detection thresholds per PRD:
+  - Smile threshold: > 0.4
+  - Mouth open threshold: > 0.3
+  - Eyebrow raise threshold: > 0.3
+  - Hold duration: 500ms for all expressions
+- Added exponential smoothing (factor: 0.4) to reduce noise
+- Hold detection with 80% tolerance for position drift during hold
+- Tracks hold state individually for each expression type
+- Integrated into processDetectionResults() for real-time processing
+- Status display now shows expression percentages (Smile/Mouth/Brow) for debugging
+- Public API: processFrame(), reset(), getCurrentValues(), getBlendshapeScores(), getHoldProgress(), isExpressionCurrentlyActive(), isHolding(), getDetectionHistory(), setConfig(), getConfig()
+- Commit: e8706fe
