@@ -85,3 +85,23 @@
 - Detection loop starts automatically after initialization
 - Added control button and retry button event handlers
 - Commit: f469c7f
+
+### Phase 3: Detection Modules
+
+#### Task 7: BlinkDetector - EAR calculation + blendshape eyeBlinkLeft/Right - COMPLETED
+- Implemented BlinkDetector as an IIFE (Immediately Invoked Function Expression) module
+- Added Eye Aspect Ratio (EAR) calculation using MediaPipe Face Mesh landmarks:
+  - Left eye landmarks: top [159, 158, 157], bottom [145, 144, 163], inner 133, outer 33
+  - Right eye landmarks: top [386, 385, 384], bottom [374, 373, 380], inner 362, outer 263
+- Calculates EAR = avgVerticalDistance / horizontalDistance for each eye
+- Added blendshape-based blink detection using eyeBlinkLeft/eyeBlinkRight scores
+- Detection thresholds per PRD:
+  - EAR threshold: < 0.21 indicates blink
+  - Blendshape threshold: > 0.5 indicates blink
+  - Requires 2+ consecutive frames to confirm a blink
+- Added anti-double-counting: minimum 150ms between blinks
+- Added max blink duration (500ms) to distinguish from eyes closed
+- Integrated into processDetectionResults() for real-time processing
+- Status display now shows real-time EAR value for debugging
+- Public API: processFrame(), reset(), getBlinkCount(), getCurrentEAR(), getCurrentBlendshapes(), isCurrentlyBlinking(), setConfig(), getConfig()
+- Commit: 0efb348
