@@ -794,6 +794,9 @@
             // Process head movement detection
             const headResult = HeadMovementDetector.processFrame(results);
 
+            // Process expression detection
+            const expressionResult = ExpressionDetector.processFrame(results);
+
             // Check if a face was detected
             if (results && results.faceLandmarks && results.faceLandmarks.length > 0) {
                 const landmarks = results.faceLandmarks[0];
@@ -815,12 +818,12 @@
                     elements.faceGuide.classList.remove('detected');
                     updateStatus(facePosition.message);
                 } else {
-                    // Show EAR and head angle values for debugging/feedback
-                    const earDisplay = blinkResult.ear.average.toFixed(2);
-                    const yawDisplay = headResult.yawFromBaseline.toFixed(1);
-                    const pitchDisplay = headResult.pitchFromBaseline.toFixed(1);
+                    // Show expression values for debugging/feedback
+                    const smileDisplay = (expressionResult.values.smile * 100).toFixed(0);
+                    const mouthDisplay = (expressionResult.values.mouthOpen * 100).toFixed(0);
+                    const browDisplay = (expressionResult.values.eyebrowRaise * 100).toFixed(0);
                     const calibStatus = headResult.isCalibrated ? '' : ' (calibrating...)';
-                    updateStatus(`EAR: ${earDisplay} | Yaw: ${yawDisplay}° | Pitch: ${pitchDisplay}°${calibStatus}`);
+                    updateStatus(`Smile: ${smileDisplay}% | Mouth: ${mouthDisplay}% | Brow: ${browDisplay}%${calibStatus}`);
                 }
 
                 // Draw face landmarks on canvas (mirrored to match video)
@@ -1728,6 +1731,445 @@
                 getHoldProgress,
                 getHoldDirection,
                 getMovementHistory,
+                setConfig,
+                getConfig
+            };
+        })();
+
+        // =====================================================
+        // EXPRESSION DETECTOR MODULE
+        // Detects facial expressions: smile, mouth open, eyebrow raise
+        // Uses MediaPipe blendshapes for detection
+        // =====================================================
+
+        const ExpressionDetector = (function() {
+            // Configuration with thresholds from PRD
+            const config = {
+                // Smile detection threshold (blendshape score > 0.4)
+                smileThreshold: 0.4,
+                // Mouth open detection threshold (blendshape score > 0.3)
+                mouthOpenThreshold: 0.3,
+                // Eyebrow raise detection threshold (blendshape score > 0.3)
+                eyebrowRaiseThreshold: 0.3,
+                // Hold duration required in milliseconds
+                holdDuration: 500,
+                // Smoothing factor for expression values (0-1, higher = more smoothing)
+                smoothingFactor: 0.4,
+                // Tolerance for position drift during hold (as fraction of threshold)
+                holdTolerance: 0.8
+            };
+
+            // Blendshape category names used by MediaPipe
+            const blendshapeNames = {
+                // Smile detection - use mouth smile blendshapes
+                smileLeft: 'mouthSmileLeft',
+                smileRight: 'mouthSmileRight',
+                // Mouth open detection - use jaw open blendshape
+                jawOpen: 'jawOpen',
+                // Additional mouth open indicators
+                mouthOpen: 'mouthOpen',
+                // Eyebrow raise detection
+                browInnerUp: 'browInnerUp',
+                browOuterUpLeft: 'browOuterUpLeft',
+                browOuterUpRight: 'browOuterUpRight'
+            };
+
+            // State
+            let state = {
+                // Current smoothed expression values
+                currentValues: {
+                    smile: 0,
+                    mouthOpen: 0,
+                    eyebrowRaise: 0
+                },
+                // Raw values (before smoothing)
+                rawValues: {
+                    smile: 0,
+                    mouthOpen: 0,
+                    eyebrowRaise: 0
+                },
+                // Individual blendshape scores for debugging
+                blendshapeScores: {
+                    smileLeft: 0,
+                    smileRight: 0,
+                    jawOpen: 0,
+                    browInnerUp: 0,
+                    browOuterUpLeft: 0,
+                    browOuterUpRight: 0
+                },
+                // Hold tracking for each expression type
+                holdState: {
+                    smile: { startTime: null, progress: 0, isHolding: false },
+                    mouthOpen: { startTime: null, progress: 0, isHolding: false },
+                    eyebrowRaise: { startTime: null, progress: 0, isHolding: false }
+                },
+                // Detection history
+                detectionHistory: []
+            };
+
+            /**
+             * Extract blendshape scores from face detection results
+             * @param {Array} blendshapes - Array of blendshape categories from MediaPipe
+             * @returns {Object} Object with blendshape scores
+             */
+            function extractBlendshapeScores(blendshapes) {
+                const scores = {
+                    smileLeft: 0,
+                    smileRight: 0,
+                    jawOpen: 0,
+                    browInnerUp: 0,
+                    browOuterUpLeft: 0,
+                    browOuterUpRight: 0
+                };
+
+                if (!blendshapes || !Array.isArray(blendshapes)) {
+                    return scores;
+                }
+
+                // Iterate through blendshapes and extract relevant scores
+                for (const shape of blendshapes) {
+                    switch (shape.categoryName) {
+                        case blendshapeNames.smileLeft:
+                            scores.smileLeft = shape.score;
+                            break;
+                        case blendshapeNames.smileRight:
+                            scores.smileRight = shape.score;
+                            break;
+                        case blendshapeNames.jawOpen:
+                            scores.jawOpen = shape.score;
+                            break;
+                        case blendshapeNames.browInnerUp:
+                            scores.browInnerUp = shape.score;
+                            break;
+                        case blendshapeNames.browOuterUpLeft:
+                            scores.browOuterUpLeft = shape.score;
+                            break;
+                        case blendshapeNames.browOuterUpRight:
+                            scores.browOuterUpRight = shape.score;
+                            break;
+                    }
+                }
+
+                return scores;
+            }
+
+            /**
+             * Calculate smile intensity from blendshape scores
+             * Uses average of left and right mouth smile
+             */
+            function calculateSmileIntensity(scores) {
+                return (scores.smileLeft + scores.smileRight) / 2;
+            }
+
+            /**
+             * Calculate mouth open intensity from blendshape scores
+             * Uses jaw open blendshape
+             */
+            function calculateMouthOpenIntensity(scores) {
+                return scores.jawOpen;
+            }
+
+            /**
+             * Calculate eyebrow raise intensity from blendshape scores
+             * Uses combination of inner and outer brow raises
+             */
+            function calculateEyebrowRaiseIntensity(scores) {
+                // Weight inner brow more as it's more distinctive
+                const innerWeight = 0.5;
+                const outerWeight = 0.25;
+
+                return (scores.browInnerUp * innerWeight) +
+                       (scores.browOuterUpLeft * outerWeight) +
+                       (scores.browOuterUpRight * outerWeight);
+            }
+
+            /**
+             * Apply exponential smoothing to reduce noise
+             */
+            function smoothValue(currentSmoothed, newRaw, factor) {
+                return currentSmoothed * (1 - factor) + newRaw * factor;
+            }
+
+            /**
+             * Check if an expression is currently active (above threshold)
+             */
+            function isExpressionActive(expressionType, value) {
+                switch (expressionType) {
+                    case 'smile':
+                        return value >= config.smileThreshold;
+                    case 'mouthOpen':
+                        return value >= config.mouthOpenThreshold;
+                    case 'eyebrowRaise':
+                        return value >= config.eyebrowRaiseThreshold;
+                    default:
+                        return false;
+                }
+            }
+
+            /**
+             * Get the threshold for an expression type
+             */
+            function getThreshold(expressionType) {
+                switch (expressionType) {
+                    case 'smile':
+                        return config.smileThreshold;
+                    case 'mouthOpen':
+                        return config.mouthOpenThreshold;
+                    case 'eyebrowRaise':
+                        return config.eyebrowRaiseThreshold;
+                    default:
+                        return 0.5;
+                }
+            }
+
+            /**
+             * Update hold state for a specific expression
+             * @returns {Object} Updated hold state with detection result
+             */
+            function updateHoldState(expressionType, value, now) {
+                const holdInfo = state.holdState[expressionType];
+                const threshold = getThreshold(expressionType);
+                const isActive = value >= threshold;
+                const holdThreshold = threshold * config.holdTolerance;
+                const isHoldingPosition = value >= holdThreshold;
+
+                const result = {
+                    isActive: isActive,
+                    isHolding: false,
+                    holdProgress: 0,
+                    detected: false
+                };
+
+                if (isActive) {
+                    if (holdInfo.isHolding && isHoldingPosition) {
+                        // Continue holding
+                        const holdTime = now - holdInfo.startTime;
+                        holdInfo.progress = Math.min(holdTime / config.holdDuration, 1);
+                        result.holdProgress = holdInfo.progress;
+                        result.isHolding = true;
+
+                        // Check if hold is complete
+                        if (holdTime >= config.holdDuration) {
+                            result.detected = true;
+                            // Reset hold to allow detecting again
+                            holdInfo.startTime = null;
+                            holdInfo.progress = 0;
+                            holdInfo.isHolding = false;
+                        }
+                    } else if (!holdInfo.isHolding) {
+                        // Start new hold
+                        holdInfo.startTime = now;
+                        holdInfo.progress = 0;
+                        holdInfo.isHolding = true;
+                        result.isHolding = true;
+                    } else if (!isHoldingPosition) {
+                        // Position dropped below hold tolerance - restart
+                        holdInfo.startTime = now;
+                        holdInfo.progress = 0;
+                    }
+                } else {
+                    // Expression not active - reset hold
+                    holdInfo.startTime = null;
+                    holdInfo.progress = 0;
+                    holdInfo.isHolding = false;
+                }
+
+                return result;
+            }
+
+            /**
+             * Process a frame and detect facial expressions
+             * @param {Object} faceResults - Results from FaceLandmarker.detectForVideo()
+             * @returns {Object} Detection result with expression status and metrics
+             */
+            function processFrame(faceResults) {
+                const now = performance.now();
+
+                // Default result
+                const result = {
+                    // Current expression values (0-1)
+                    values: {
+                        smile: 0,
+                        mouthOpen: 0,
+                        eyebrowRaise: 0
+                    },
+                    // Individual blendshape scores
+                    blendshapeScores: state.blendshapeScores,
+                    // Expression states (active/holding/detected)
+                    expressions: {
+                        smile: { isActive: false, isHolding: false, holdProgress: 0, detected: false },
+                        mouthOpen: { isActive: false, isHolding: false, holdProgress: 0, detected: false },
+                        eyebrowRaise: { isActive: false, isHolding: false, holdProgress: 0, detected: false }
+                    },
+                    // Overall detection flags
+                    anyExpressionDetected: false,
+                    detectedExpression: null
+                };
+
+                // Check if we have valid face data
+                if (!faceResults || !faceResults.faceLandmarks || faceResults.faceLandmarks.length === 0) {
+                    // Reset hold states when no face detected
+                    Object.keys(state.holdState).forEach(key => {
+                        state.holdState[key] = { startTime: null, progress: 0, isHolding: false };
+                    });
+                    return result;
+                }
+
+                // Get blendshapes from face results
+                const blendshapes = faceResults.faceBlendshapes && faceResults.faceBlendshapes.length > 0
+                    ? faceResults.faceBlendshapes[0].categories
+                    : null;
+
+                if (!blendshapes) {
+                    return result;
+                }
+
+                // Extract blendshape scores
+                state.blendshapeScores = extractBlendshapeScores(blendshapes);
+                result.blendshapeScores = state.blendshapeScores;
+
+                // Calculate raw expression intensities
+                state.rawValues.smile = calculateSmileIntensity(state.blendshapeScores);
+                state.rawValues.mouthOpen = calculateMouthOpenIntensity(state.blendshapeScores);
+                state.rawValues.eyebrowRaise = calculateEyebrowRaiseIntensity(state.blendshapeScores);
+
+                // Apply smoothing
+                state.currentValues.smile = smoothValue(
+                    state.currentValues.smile,
+                    state.rawValues.smile,
+                    config.smoothingFactor
+                );
+                state.currentValues.mouthOpen = smoothValue(
+                    state.currentValues.mouthOpen,
+                    state.rawValues.mouthOpen,
+                    config.smoothingFactor
+                );
+                state.currentValues.eyebrowRaise = smoothValue(
+                    state.currentValues.eyebrowRaise,
+                    state.rawValues.eyebrowRaise,
+                    config.smoothingFactor
+                );
+
+                // Update result values
+                result.values = { ...state.currentValues };
+
+                // Update hold states and check for detections
+                const expressionTypes = ['smile', 'mouthOpen', 'eyebrowRaise'];
+
+                for (const expressionType of expressionTypes) {
+                    const value = state.currentValues[expressionType];
+                    const holdResult = updateHoldState(expressionType, value, now);
+
+                    result.expressions[expressionType] = holdResult;
+
+                    // Track if any expression was detected
+                    if (holdResult.detected) {
+                        result.anyExpressionDetected = true;
+                        result.detectedExpression = expressionType;
+
+                        // Add to detection history
+                        state.detectionHistory.push({
+                            expression: expressionType,
+                            value: value,
+                            timestamp: now
+                        });
+
+                        console.log(`Expression detected: ${expressionType} (value: ${value.toFixed(2)}, held for ${config.holdDuration}ms)`);
+                    }
+                }
+
+                return result;
+            }
+
+            /**
+             * Reset the detector state
+             * Call this when starting a new challenge
+             */
+            function reset() {
+                state.currentValues = { smile: 0, mouthOpen: 0, eyebrowRaise: 0 };
+                state.rawValues = { smile: 0, mouthOpen: 0, eyebrowRaise: 0 };
+                state.holdState = {
+                    smile: { startTime: null, progress: 0, isHolding: false },
+                    mouthOpen: { startTime: null, progress: 0, isHolding: false },
+                    eyebrowRaise: { startTime: null, progress: 0, isHolding: false }
+                };
+                state.detectionHistory = [];
+                console.log('ExpressionDetector reset');
+            }
+
+            /**
+             * Get current expression values
+             */
+            function getCurrentValues() {
+                return { ...state.currentValues };
+            }
+
+            /**
+             * Get current blendshape scores
+             */
+            function getBlendshapeScores() {
+                return { ...state.blendshapeScores };
+            }
+
+            /**
+             * Get hold progress for a specific expression
+             */
+            function getHoldProgress(expressionType) {
+                if (state.holdState[expressionType]) {
+                    return state.holdState[expressionType].progress;
+                }
+                return 0;
+            }
+
+            /**
+             * Check if a specific expression is currently active
+             */
+            function isExpressionCurrentlyActive(expressionType) {
+                const value = state.currentValues[expressionType];
+                return isExpressionActive(expressionType, value);
+            }
+
+            /**
+             * Check if currently holding a specific expression
+             */
+            function isHolding(expressionType) {
+                if (state.holdState[expressionType]) {
+                    return state.holdState[expressionType].isHolding;
+                }
+                return false;
+            }
+
+            /**
+             * Get detection history
+             */
+            function getDetectionHistory() {
+                return [...state.detectionHistory];
+            }
+
+            /**
+             * Update configuration
+             */
+            function setConfig(newConfig) {
+                Object.assign(config, newConfig);
+            }
+
+            /**
+             * Get current configuration
+             */
+            function getConfig() {
+                return { ...config };
+            }
+
+            // Public API
+            return {
+                processFrame,
+                reset,
+                getCurrentValues,
+                getBlendshapeScores,
+                getHoldProgress,
+                isExpressionCurrentlyActive,
+                isHolding,
+                getDetectionHistory,
                 setConfig,
                 getConfig
             };
