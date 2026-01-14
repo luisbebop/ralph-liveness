@@ -1043,7 +1043,7 @@
 
         /**
          * Draw face landmarks on the canvas
-         * Draws contours for face mesh visualization
+         * Draws contours for face mesh visualization with feature highlighting
          */
         function drawFaceLandmarks(ctx, landmarks) {
             const width = elements.canvas.width;
@@ -1056,27 +1056,110 @@
             ctx.translate(width, 0);
             ctx.scale(-1, 1);
 
-            // Set drawing style
-            ctx.fillStyle = 'rgba(74, 144, 217, 0.6)';
-            ctx.strokeStyle = 'rgba(74, 144, 217, 0.8)';
-            ctx.lineWidth = 1;
+            // Get current challenge for feature highlighting
+            const currentChallenge = ChallengeManager.getCurrentChallenge();
+            const challengeState = ChallengeManager.getCurrentState();
+            const isDetecting = challengeState === ChallengeManager.States.DETECTING;
 
-            // Draw key facial contours
-            const contours = {
-                // Face oval
-                faceOval: [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10],
-                // Left eye
-                leftEye: [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 33],
-                // Right eye
-                rightEye: [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398, 362],
+            // Define all facial contours with their styles
+            const contourDefinitions = {
+                // Face oval - subtle outline
+                faceOval: {
+                    indices: [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10],
+                    baseColor: 'rgba(74, 144, 217, 0.4)',
+                    highlightColor: 'rgba(76, 175, 80, 0.8)',
+                    lineWidth: 2,
+                    highlightOn: ['turn_left', 'turn_right', 'look_up', 'look_down']
+                },
+                // Left eyebrow
+                leftEyebrow: {
+                    indices: [276, 283, 282, 295, 285, 300, 293, 334, 296, 336],
+                    baseColor: 'rgba(74, 144, 217, 0.5)',
+                    highlightColor: 'rgba(255, 193, 7, 0.9)',
+                    lineWidth: 2,
+                    highlightOn: ['raise_eyebrows']
+                },
+                // Right eyebrow
+                rightEyebrow: {
+                    indices: [46, 53, 52, 65, 55, 70, 63, 105, 66, 107],
+                    baseColor: 'rgba(74, 144, 217, 0.5)',
+                    highlightColor: 'rgba(255, 193, 7, 0.9)',
+                    lineWidth: 2,
+                    highlightOn: ['raise_eyebrows']
+                },
+                // Left eye outer
+                leftEye: {
+                    indices: [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 33],
+                    baseColor: 'rgba(74, 144, 217, 0.6)',
+                    highlightColor: 'rgba(33, 150, 243, 0.9)',
+                    lineWidth: 2,
+                    highlightOn: ['blink']
+                },
+                // Right eye outer
+                rightEye: {
+                    indices: [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398, 362],
+                    baseColor: 'rgba(74, 144, 217, 0.6)',
+                    highlightColor: 'rgba(33, 150, 243, 0.9)',
+                    lineWidth: 2,
+                    highlightOn: ['blink']
+                },
+                // Left iris (approximate circle)
+                leftIris: {
+                    indices: [468, 469, 470, 471, 472],
+                    baseColor: 'rgba(74, 144, 217, 0.3)',
+                    highlightColor: 'rgba(33, 150, 243, 0.7)',
+                    lineWidth: 1,
+                    highlightOn: ['blink'],
+                    isIris: true
+                },
+                // Right iris (approximate circle)
+                rightIris: {
+                    indices: [473, 474, 475, 476, 477],
+                    baseColor: 'rgba(74, 144, 217, 0.3)',
+                    highlightColor: 'rgba(33, 150, 243, 0.7)',
+                    lineWidth: 1,
+                    highlightOn: ['blink'],
+                    isIris: true
+                },
+                // Nose bridge
+                noseBridge: {
+                    indices: [168, 6, 197, 195, 5, 4, 1],
+                    baseColor: 'rgba(74, 144, 217, 0.4)',
+                    highlightColor: 'rgba(76, 175, 80, 0.7)',
+                    lineWidth: 1.5,
+                    highlightOn: ['turn_left', 'turn_right', 'look_up', 'look_down']
+                },
+                // Nose bottom
+                noseBottom: {
+                    indices: [98, 97, 2, 326, 327],
+                    baseColor: 'rgba(74, 144, 217, 0.4)',
+                    highlightColor: 'rgba(76, 175, 80, 0.7)',
+                    lineWidth: 1.5,
+                    highlightOn: ['turn_left', 'turn_right', 'look_up', 'look_down']
+                },
                 // Lips outer
-                lipsOuter: [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61]
+                lipsOuter: {
+                    indices: [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61],
+                    baseColor: 'rgba(74, 144, 217, 0.5)',
+                    highlightColor: 'rgba(233, 30, 99, 0.9)',
+                    lineWidth: 2,
+                    highlightOn: ['smile', 'open_mouth']
+                },
+                // Lips inner
+                lipsInner: {
+                    indices: [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312, 13, 82, 81, 80, 191, 78],
+                    baseColor: 'rgba(74, 144, 217, 0.3)',
+                    highlightColor: 'rgba(233, 30, 99, 0.7)',
+                    lineWidth: 1.5,
+                    highlightOn: ['smile', 'open_mouth']
+                }
             };
 
-            // Draw each contour
-            Object.values(contours).forEach(indices => {
+            // Helper function to draw a contour path
+            function drawContourPath(indices, color, lineWidth, filled = false) {
                 ctx.beginPath();
                 indices.forEach((index, i) => {
+                    if (index >= landmarks.length) return;
                     const point = landmarks[index];
                     const x = point.x * width;
                     const y = point.y * height;
@@ -1086,19 +1169,154 @@
                         ctx.lineTo(x, y);
                     }
                 });
+                ctx.strokeStyle = color;
+                ctx.lineWidth = lineWidth;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
                 ctx.stroke();
+                if (filled) {
+                    ctx.fillStyle = color.replace(/[\d.]+\)$/, '0.2)');
+                    ctx.fill();
+                }
+            }
+
+            // Helper function to draw iris as a filled circle
+            function drawIris(indices, color) {
+                if (indices.length === 0 || indices[0] >= landmarks.length) return;
+
+                // Calculate center from iris landmarks
+                let centerX = 0, centerY = 0;
+                let validPoints = 0;
+                indices.forEach(index => {
+                    if (index < landmarks.length) {
+                        centerX += landmarks[index].x;
+                        centerY += landmarks[index].y;
+                        validPoints++;
+                    }
+                });
+                if (validPoints === 0) return;
+
+                centerX = (centerX / validPoints) * width;
+                centerY = (centerY / validPoints) * height;
+
+                // Draw iris circle
+                const radius = 6;
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+                ctx.fillStyle = color;
+                ctx.fill();
+            }
+
+            // Draw each contour with appropriate highlighting
+            Object.entries(contourDefinitions).forEach(([name, contour]) => {
+                // Determine if this feature should be highlighted
+                let shouldHighlight = false;
+                if (isDetecting && currentChallenge && contour.highlightOn) {
+                    shouldHighlight = contour.highlightOn.includes(currentChallenge.id);
+                }
+
+                const color = shouldHighlight ? contour.highlightColor : contour.baseColor;
+                const lineWidth = shouldHighlight ? contour.lineWidth * 1.5 : contour.lineWidth;
+
+                if (contour.isIris) {
+                    drawIris(contour.indices, color);
+                } else {
+                    const shouldFill = shouldHighlight && (name.includes('Eye') || name.includes('lips'));
+                    drawContourPath(contour.indices, color, lineWidth, shouldFill);
+                }
             });
 
-            // Draw landmark points for key features
-            const keyPoints = [1, 33, 133, 362, 263, 61, 291]; // Nose, eyes, mouth corners
-            keyPoints.forEach(index => {
+            // Draw key landmark points for nose and mouth corners
+            const keyPoints = [
+                { index: 1, size: 4, baseColor: 'rgba(74, 144, 217, 0.7)', highlight: ['turn_left', 'turn_right', 'look_up', 'look_down'] }, // Nose tip
+                { index: 4, size: 3, baseColor: 'rgba(74, 144, 217, 0.5)', highlight: ['turn_left', 'turn_right', 'look_up', 'look_down'] }, // Nose bridge
+                { index: 61, size: 3, baseColor: 'rgba(74, 144, 217, 0.6)', highlight: ['smile', 'open_mouth'] }, // Left mouth corner
+                { index: 291, size: 3, baseColor: 'rgba(74, 144, 217, 0.6)', highlight: ['smile', 'open_mouth'] }, // Right mouth corner
+                { index: 33, size: 3, baseColor: 'rgba(74, 144, 217, 0.6)', highlight: ['blink'] }, // Left eye outer
+                { index: 133, size: 3, baseColor: 'rgba(74, 144, 217, 0.6)', highlight: ['blink'] }, // Left eye inner
+                { index: 362, size: 3, baseColor: 'rgba(74, 144, 217, 0.6)', highlight: ['blink'] }, // Right eye outer
+                { index: 263, size: 3, baseColor: 'rgba(74, 144, 217, 0.6)', highlight: ['blink'] }  // Right eye inner
+            ];
+
+            keyPoints.forEach(({ index, size, baseColor, highlight }) => {
+                if (index >= landmarks.length) return;
+
+                let shouldHighlight = false;
+                if (isDetecting && currentChallenge && highlight) {
+                    shouldHighlight = highlight.includes(currentChallenge.id);
+                }
+
+                const color = shouldHighlight ? 'rgba(76, 175, 80, 0.9)' : baseColor;
+                const pointSize = shouldHighlight ? size * 1.5 : size;
+
                 const point = landmarks[index];
                 const x = point.x * width;
                 const y = point.y * height;
+
                 ctx.beginPath();
-                ctx.arc(x, y, 3, 0, Math.PI * 2);
+                ctx.arc(x, y, pointSize, 0, Math.PI * 2);
+                ctx.fillStyle = color;
                 ctx.fill();
+
+                // Add glow effect for highlighted points
+                if (shouldHighlight) {
+                    ctx.beginPath();
+                    ctx.arc(x, y, pointSize * 2, 0, Math.PI * 2);
+                    ctx.fillStyle = color.replace(/[\d.]+\)$/, '0.2)');
+                    ctx.fill();
+                }
             });
+
+            // Draw direction indicator for head movement challenges
+            if (isDetecting && currentChallenge) {
+                const headAngles = HeadMovementDetector.getCurrentAngles();
+                const baseline = HeadMovementDetector.getBaseline();
+
+                if (currentChallenge.detector === 'head' && headAngles && baseline) {
+                    const noseTip = landmarks[1];
+                    const centerX = noseTip.x * width;
+                    const centerY = noseTip.y * height;
+
+                    // Draw direction arrow based on challenge
+                    ctx.strokeStyle = 'rgba(76, 175, 80, 0.8)';
+                    ctx.lineWidth = 3;
+                    ctx.lineCap = 'round';
+
+                    const arrowLength = 30;
+                    let endX = centerX, endY = centerY;
+
+                    switch (currentChallenge.direction) {
+                        case 'left':
+                            endX = centerX + arrowLength; // Mirrored
+                            break;
+                        case 'right':
+                            endX = centerX - arrowLength; // Mirrored
+                            break;
+                        case 'up':
+                            endY = centerY - arrowLength;
+                            break;
+                        case 'down':
+                            endY = centerY + arrowLength;
+                            break;
+                    }
+
+                    // Draw arrow line
+                    ctx.beginPath();
+                    ctx.moveTo(centerX, centerY);
+                    ctx.lineTo(endX, endY);
+                    ctx.stroke();
+
+                    // Draw arrowhead
+                    const angle = Math.atan2(endY - centerY, endX - centerX);
+                    const headLength = 10;
+                    ctx.beginPath();
+                    ctx.moveTo(endX, endY);
+                    ctx.lineTo(endX - headLength * Math.cos(angle - Math.PI / 6), endY - headLength * Math.sin(angle - Math.PI / 6));
+                    ctx.moveTo(endX, endY);
+                    ctx.lineTo(endX - headLength * Math.cos(angle + Math.PI / 6), endY - headLength * Math.sin(angle + Math.PI / 6));
+                    ctx.stroke();
+                }
+            }
 
             // Restore context state
             ctx.restore();
