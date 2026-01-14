@@ -366,6 +366,15 @@
   - Users can retry the current challenge without losing progress on completed challenges
 - Commit: 4b27174
 
+#### Fix 4: Inverted left/right head turn detection - COMPLETED
+- Issue: The labels/instructions and emoji for left and right head turns were inverted
+- Root cause: The video is mirrored with CSS `transform: scaleX(-1)` for a natural mirror experience, but the yaw detection logic was returning 'right' when user turned left and vice versa
+- Solution: Fixed the direction mapping in HeadMovementDetector
+  - Updated `getMovementDirection()`: positive yaw delta now correctly returns 'left' instead of 'right'
+  - Updated `isHoldingPosition()`: swapped the yaw threshold checks for left/right cases
+- Now when user sees 👈 "Turn Head Left" and turns their head left, it correctly detects as 'left'
+- Commit: 85d687c
+
 ### Documentation
 
 #### README update - COMPLETED
