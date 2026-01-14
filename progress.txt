@@ -296,3 +296,38 @@
   - Shows warning toast if user tries to start without face visible
 - Updated all error messages with appropriate error types
 - Commit: 0d78f3c
+
+#### Task 18: Anti-spoofing measures (randomization, continuous tracking) - COMPLETED
+- Implemented AntiSpoofingModule as an IIFE module with multiple detection methods:
+  - Face position stability tracking: Detects static photos by analyzing variance in face position over time
+  - 3D depth variance analysis: Detects flat images by monitoring z-coordinate changes
+  - Blink pattern analysis: Detects videos with looped patterns by checking blink intervals and regularity
+  - Movement pattern analysis: Detects unnatural/mechanical movements by analyzing motion variance
+- Scoring system with configurable thresholds:
+  - Individual scores for each detection method (0-1 scale)
+  - Overall weighted score combining all methods
+  - Warning threshold (0.5) and suspicion threshold (0.7)
+- Integrated anti-spoofing into ChallengeManager:
+  - startSession() called when verification begins
+  - stopSession() called on completion or failure
+  - processFrame() called every frame during verification
+  - Periodic spoofing checks at configurable intervals
+  - Final verification check before completing all challenges
+- Added unpredictable timing for anti-spoofing:
+  - Random delays (200-800ms) added between challenges
+  - getRandomDelay() function for timing randomization
+  - Makes timing harder to predict for pre-recorded video attacks
+- Configuration options added to ChallengeManager:
+  - randomDelayMin/randomDelayMax: Control random delay range
+  - enableAntiSpoofing: Toggle anti-spoofing features
+  - spoofCheckInterval: How often to check for spoofing
+- Added 'spoof_detected' failure reason:
+  - Displayed as "Verification failed - Please use a live camera"
+  - Logged with detailed spoofing check results in console
+- Anti-spoofing features per PRD:
+  - Random challenge order each session (already in Task 10)
+  - Unpredictable timing between challenges (new)
+  - Multiple detection types combined (already in Tasks 7-9)
+  - Hold duration requirements (already in Tasks 7-9)
+  - Continuous face presence validation (new)
+- Commit: cde634a
