@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Liveness Detection</title>
+    <style>
+        :root {
+            --primary-color: #4a90d9;
+            --success-color: #4caf50;
+            --error-color: #f44336;
+            --warning-color: #ff9800;
+            --bg-color: #1a1a2e;
+            --card-bg: #16213e;
+            --text-color: #ffffff;
+            --text-muted: #a0a0a0;
+            --border-radius: 12px;
+            --transition-speed: 0.3s;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+
+        /* Header Section */
+        .header {
+            text-align: center;
+            width: 100%;
+        }
+
+        .header h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        /* Video Container */
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 480px;
+            aspect-ratio: 4/3;
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror the video */
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        /* Face Guide Overlay */
+        .face-guide {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 55%;
+            height: 70%;
+            border: 3px dashed var(--primary-color);
+            border-radius: 50%;
+            opacity: 0.7;
+            transition: border-color var(--transition-speed), opacity var(--transition-speed);
+        }
+
+        .face-guide.detected {
+            border-color: var(--success-color);
+            border-style: solid;
+            opacity: 1;
+        }
+
+        .face-guide.warning {
+            border-color: var(--warning-color);
+        }
+
+        /* Status Overlay */
+        .status-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+            padding: 40px 20px 20px;
+            text-align: center;
+        }
+
+        .status-text {
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+
+        /* Challenge Panel */
+        .challenge-panel {
+            width: 100%;
+            max-width: 480px;
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 24px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        }
+
+        .challenge-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .challenge-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .challenge-timer {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .challenge-instruction {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px;
+            background: rgba(74, 144, 217, 0.1);
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+
+        .challenge-icon {
+            font-size: 2.5rem;
+            flex-shrink: 0;
+        }
+
+        .challenge-text {
+            flex: 1;
+        }
+
+        .challenge-text h3 {
+            font-size: 1.2rem;
+            margin-bottom: 4px;
+        }
+
+        .challenge-text p {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            width: 100%;
+        }
+
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--primary-color);
+            border-radius: 4px;
+            width: 0%;
+            transition: width var(--transition-speed);
+        }
+
+        .progress-fill.success {
+            background: var(--success-color);
+        }
+
+        /* Progress Indicators */
+        .progress-indicators {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transition: background var(--transition-speed), transform var(--transition-speed);
+        }
+
+        .indicator.active {
+            background: var(--primary-color);
+            transform: scale(1.2);
+        }
+
+        .indicator.completed {
+            background: var(--success-color);
+        }
+
+        .indicator.failed {
+            background: var(--error-color);
+        }
+
+        /* Control Button */
+        .control-btn {
+            width: 100%;
+            max-width: 480px;
+            padding: 16px 32px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: white;
+            background: var(--primary-color);
+            border: none;
+            border-radius: var(--border-radius);
+            cursor: pointer;
+            transition: background var(--transition-speed), transform 0.1s;
+        }
+
+        .control-btn:hover {
+            background: #3a7bc8;
+        }
+
+        .control-btn:active {
+            transform: scale(0.98);
+        }
+
+        .control-btn:disabled {
+            background: var(--text-muted);
+            cursor: not-allowed;
+        }
+
+        /* Result Screen */
+        .result-screen {
+            display: none;
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        .result-screen.visible {
+            display: block;
+        }
+
+        .result-icon {
+            font-size: 4rem;
+            margin-bottom: 16px;
+        }
+
+        .result-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .result-message {
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+
+        /* Error Message */
+        .error-message {
+            display: none;
+            background: rgba(244, 67, 54, 0.1);
+            border: 1px solid var(--error-color);
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+            color: var(--error-color);
+        }
+
+        .error-message.visible {
+            display: block;
+        }
+
+        /* Responsive Adjustments */
+        @media (max-width: 480px) {
+            .header h1 {
+                font-size: 1.5rem;
+            }
+
+            .challenge-panel {
+                padding: 16px;
+            }
+
+            .challenge-instruction {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .challenge-icon {
+                font-size: 2rem;
+            }
+        }
+
+        /* Loading State */
+        .loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            padding: 40px;
+        }
+
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-top-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Hidden utility class */
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>Liveness Verification</h1>
+            <p>Complete the challenges to verify you're a real person</p>
+        </div>
+
+        <!-- Video Container -->
+        <div class="video-container">
+            <video id="video" autoplay playsinline></video>
+            <canvas id="canvas"></canvas>
+            <div class="face-guide" id="faceGuide"></div>
+            <div class="status-overlay">
+                <p class="status-text" id="statusText">Initializing camera...</p>
+            </div>
+        </div>
+
+        <!-- Error Message -->
+        <div class="error-message" id="errorMessage">
+            <p id="errorText">Camera access denied. Please allow camera access and refresh the page.</p>
+        </div>
+
+        <!-- Challenge Panel -->
+        <div class="challenge-panel" id="challengePanel">
+            <div class="challenge-header">
+                <span class="challenge-title">Challenge <span id="challengeNumber">1</span> of 4</span>
+                <span class="challenge-timer" id="challengeTimer">5s remaining</span>
+            </div>
+            <div class="challenge-instruction">
+                <span class="challenge-icon" id="challengeIcon">👁</span>
+                <div class="challenge-text">
+                    <h3 id="challengeName">Blink Your Eyes</h3>
+                    <p id="challengeHint">Blink naturally 2-3 times</p>
+                </div>
+            </div>
+            <div class="progress-container">
+                <div class="progress-label">
+                    <span>Hold progress</span>
+                    <span id="holdPercent">0%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+            </div>
+            <div class="progress-indicators">
+                <div class="indicator active" id="indicator1"></div>
+                <div class="indicator" id="indicator2"></div>
+                <div class="indicator" id="indicator3"></div>
+                <div class="indicator" id="indicator4"></div>
+            </div>
+        </div>
+
+        <!-- Control Button -->
+        <button class="control-btn" id="controlBtn">Start Verification</button>
+
+        <!-- Result Screen -->
+        <div class="result-screen" id="resultScreen">
+            <div class="result-icon" id="resultIcon">✓</div>
+            <h2 class="result-title" id="resultTitle">Verification Complete</h2>
+            <p class="result-message" id="resultMessage">You have been verified as a real person.</p>
+            <button class="control-btn" id="retryBtn">Try Again</button>
+        </div>
+    </div>
+
+    <script>
+        // Placeholder for future JavaScript implementation
+        console.log('Liveness Detection App - HTML Structure Ready');
+
+        // DOM Elements references (for future use)
+        const elements = {
+            video: document.getElementById('video'),
+            canvas: document.getElementById('canvas'),
+            faceGuide: document.getElementById('faceGuide'),
+            statusText: document.getElementById('statusText'),
+            errorMessage: document.getElementById('errorMessage'),
+            errorText: document.getElementById('errorText'),
+            challengePanel: document.getElementById('challengePanel'),
+            challengeNumber: document.getElementById('challengeNumber'),
+            challengeTimer: document.getElementById('challengeTimer'),
+            challengeIcon: document.getElementById('challengeIcon'),
+            challengeName: document.getElementById('challengeName'),
+            challengeHint: document.getElementById('challengeHint'),
+            holdPercent: document.getElementById('holdPercent'),
+            progressFill: document.getElementById('progressFill'),
+            indicators: [
+                document.getElementById('indicator1'),
+                document.getElementById('indicator2'),
+                document.getElementById('indicator3'),
+                document.getElementById('indicator4')
+            ],
+            controlBtn: document.getElementById('controlBtn'),
+            resultScreen: document.getElementById('resultScreen'),
+            resultIcon: document.getElementById('resultIcon'),
+            resultTitle: document.getElementById('resultTitle'),
+            resultMessage: document.getElementById('resultMessage'),
+            retryBtn: document.getElementById('retryBtn')
+        };
+    </script>
+</body>
+</html>
