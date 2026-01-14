@@ -703,10 +703,11 @@
         </div>
     </div>
 
-    <!-- MediaPipe Tasks Vision CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js" crossorigin="anonymous"></script>
+    <!-- MediaPipe Tasks Vision - using ES modules -->
+    <script type="module">
+        // Import MediaPipe Tasks Vision from CDN
+        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.min.mjs";
 
-    <script>
         // DOM Elements references
         const elements = {
             video: document.getElementById('video'),
@@ -771,11 +772,9 @@
             updateStatus('Loading face detection model...');
 
             try {
-                const { FaceLandmarker, FilesetResolver } = vision;
-
                 // Load the WASM files from CDN
                 const filesetResolver = await FilesetResolver.forVisionTasks(
-                    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm'
+                    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm'
                 );
 
                 // Create FaceLandmarker with GPU delegate and blendshapes enabled
@@ -818,10 +817,8 @@
          */
         async function initializeFaceLandmarkerCPU() {
             try {
-                const { FaceLandmarker, FilesetResolver } = vision;
-
                 const filesetResolver = await FilesetResolver.forVisionTasks(
-                    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm'
+                    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm'
                 );
 
                 faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
