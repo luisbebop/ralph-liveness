@@ -234,3 +234,29 @@
 - Reset cleanup:
   - All animation classes properly cleaned up on retry
 - Commit: a4bf053
+
+### Phase 6: Polish
+
+#### Task 16: Face mesh visualization (contours, feature highlights) - COMPLETED
+- Enhanced drawFaceLandmarks() with comprehensive facial contours:
+  - Face oval outline
+  - Left and right eyebrows
+  - Left and right eye contours
+  - Left and right iris circles
+  - Nose bridge and nose bottom
+  - Outer and inner lip contours
+- Added challenge-aware feature highlighting:
+  - Eyes highlighted in blue during blink challenges
+  - Eyebrows highlighted in yellow during raise eyebrows challenge
+  - Lips highlighted in pink during smile/open mouth challenges
+  - Face oval and nose highlighted in green during head movement challenges
+- Added direction indicator arrows for head movement challenges:
+  - Arrow drawn from nose tip indicating required direction
+  - Arrowhead at endpoint for clear visual guidance
+- Added glow effects on highlighted key landmark points
+- Improved visual styling:
+  - Rounded line caps and joins for smooth contours
+  - Variable line widths (thicker when highlighted)
+  - Semi-transparent fill for highlighted eye and lip regions
+- Key landmark points displayed with size variation based on active challenge
+- Commit: 6656d39
