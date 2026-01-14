@@ -315,16 +315,129 @@
         /* Error Message */
         .error-message {
             display: none;
+            width: 100%;
+            max-width: 480px;
             background: rgba(244, 67, 54, 0.1);
             border: 1px solid var(--error-color);
-            border-radius: 8px;
-            padding: 16px;
+            border-radius: var(--border-radius);
+            padding: 24px;
             text-align: center;
-            color: var(--error-color);
         }
 
         .error-message.visible {
             display: block;
+            animation: fadeInUp 0.3s ease-out;
+        }
+
+        .error-icon {
+            font-size: 3rem;
+            margin-bottom: 12px;
+        }
+
+        .error-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--error-color);
+            margin-bottom: 8px;
+        }
+
+        .error-text {
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
+        .error-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .error-btn {
+            padding: 10px 20px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background var(--transition-speed), transform 0.1s;
+        }
+
+        .error-btn:active {
+            transform: scale(0.98);
+        }
+
+        .error-btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .error-btn-primary:hover {
+            background: #3a7bc8;
+        }
+
+        .error-btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-color);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .error-btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        /* Warning toast for transient messages */
+        .warning-toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-100px);
+            background: var(--warning-color);
+            color: #1a1a2e;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            z-index: 1000;
+            opacity: 0;
+            transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .warning-toast.visible {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        /* Face detection warning overlay */
+        .face-warning-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: var(--warning-color);
+            padding: 16px 24px;
+            border-radius: 8px;
+            text-align: center;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s ease-out;
+        }
+
+        .face-warning-overlay.visible {
+            opacity: 1;
+        }
+
+        .face-warning-overlay .warning-icon {
+            font-size: 2rem;
+            margin-bottom: 8px;
+        }
+
+        .face-warning-overlay .warning-text {
+            font-size: 1rem;
+            font-weight: 500;
         }
 
         /* Responsive Adjustments */
@@ -525,6 +638,10 @@
             <video id="video" autoplay playsinline></video>
             <canvas id="canvas"></canvas>
             <div class="face-guide" id="faceGuide"></div>
+            <div class="face-warning-overlay" id="faceWarningOverlay">
+                <div class="warning-icon">⚠️</div>
+                <div class="warning-text" id="faceWarningText">No face detected</div>
+            </div>
             <div class="status-overlay">
                 <p class="status-text" id="statusText">Initializing camera...</p>
             </div>
@@ -532,8 +649,17 @@
 
         <!-- Error Message -->
         <div class="error-message" id="errorMessage">
-            <p id="errorText">Camera access denied. Please allow camera access and refresh the page.</p>
+            <div class="error-icon" id="errorIcon">📷</div>
+            <h3 class="error-title" id="errorTitle">Camera Access Required</h3>
+            <p class="error-text" id="errorText">Camera access denied. Please allow camera access and refresh the page.</p>
+            <div class="error-actions">
+                <button class="error-btn error-btn-primary" id="errorRetryBtn">Try Again</button>
+                <button class="error-btn error-btn-secondary" id="errorHelpBtn">How to Fix</button>
+            </div>
         </div>
+
+        <!-- Warning Toast -->
+        <div class="warning-toast" id="warningToast"></div>
 
         <!-- Challenge Panel -->
         <div class="challenge-panel" id="challengePanel">
@@ -586,9 +712,16 @@
             video: document.getElementById('video'),
             canvas: document.getElementById('canvas'),
             faceGuide: document.getElementById('faceGuide'),
+            faceWarningOverlay: document.getElementById('faceWarningOverlay'),
+            faceWarningText: document.getElementById('faceWarningText'),
             statusText: document.getElementById('statusText'),
             errorMessage: document.getElementById('errorMessage'),
+            errorIcon: document.getElementById('errorIcon'),
+            errorTitle: document.getElementById('errorTitle'),
             errorText: document.getElementById('errorText'),
+            errorRetryBtn: document.getElementById('errorRetryBtn'),
+            errorHelpBtn: document.getElementById('errorHelpBtn'),
+            warningToast: document.getElementById('warningToast'),
             challengePanel: document.getElementById('challengePanel'),
             challengeNumber: document.getElementById('challengeNumber'),
             challengeTimer: document.getElementById('challengeTimer'),
@@ -672,7 +805,10 @@
                     return await initializeFaceLandmarkerCPU();
                 }
 
-                showError('Failed to load face detection model. Please refresh the page.');
+                showError(
+                    'Failed to load the face detection model. This might be due to a network issue.',
+                    'MODEL_LOAD_FAILED'
+                );
                 return false;
             }
         }
@@ -706,7 +842,10 @@
                 return true;
             } catch (error) {
                 console.error('CPU fallback also failed:', error);
-                showError('Failed to load face detection model. Please try a different browser.');
+                showError(
+                    'Failed to load the face detection model. Please try using a different browser like Chrome.',
+                    'MODEL_LOAD_FAILED'
+                );
                 return false;
             }
         }
@@ -718,13 +857,73 @@
             elements.statusText.textContent = message;
         }
 
+        // Error types with their display configuration
+        const ErrorTypes = {
+            CAMERA_DENIED: {
+                icon: '🚫',
+                title: 'Camera Access Denied',
+                helpText: 'To enable camera access:\n1. Click the camera icon in your browser\'s address bar\n2. Select "Allow" for camera permissions\n3. Refresh the page',
+                canRetry: true
+            },
+            CAMERA_NOT_FOUND: {
+                icon: '📷',
+                title: 'No Camera Found',
+                helpText: 'Please ensure:\n1. A camera is connected to your device\n2. Camera drivers are installed\n3. The camera isn\'t disabled in device settings',
+                canRetry: true
+            },
+            CAMERA_IN_USE: {
+                icon: '⚠️',
+                title: 'Camera In Use',
+                helpText: 'Your camera is being used by another application.\n\nTry:\n1. Close other apps using the camera (video calls, etc.)\n2. Close other browser tabs that may be using the camera\n3. Then click Try Again',
+                canRetry: true
+            },
+            CAMERA_ERROR: {
+                icon: '📷',
+                title: 'Camera Error',
+                helpText: 'There was a problem accessing your camera.\n\nTry:\n1. Refresh the page\n2. Restart your browser\n3. Check camera permissions in browser settings',
+                canRetry: true
+            },
+            MODEL_LOAD_FAILED: {
+                icon: '🔄',
+                title: 'Loading Failed',
+                helpText: 'Failed to load the face detection model.\n\nTry:\n1. Check your internet connection\n2. Refresh the page\n3. Try a different browser (Chrome recommended)',
+                canRetry: true
+            },
+            BROWSER_NOT_SUPPORTED: {
+                icon: '🌐',
+                title: 'Browser Not Supported',
+                helpText: 'Your browser doesn\'t support the required features.\n\nPlease use a modern browser:\n• Google Chrome (recommended)\n• Mozilla Firefox\n• Microsoft Edge\n• Safari 14+',
+                canRetry: false
+            },
+            INITIALIZATION_TIMEOUT: {
+                icon: '⏱️',
+                title: 'Loading Timed Out',
+                helpText: 'The app is taking too long to load.\n\nThis might be due to:\n1. Slow internet connection\n2. Server issues\n\nPlease try again or refresh the page.',
+                canRetry: true
+            }
+        };
+
+        // Current error state for retry handling
+        let currentErrorType = null;
+
         /**
-         * Show error message to user
+         * Show error message to user with type-specific display
          */
-        function showError(message) {
+        function showError(message, errorType = 'CAMERA_ERROR') {
+            const errorConfig = ErrorTypes[errorType] || ErrorTypes.CAMERA_ERROR;
+            currentErrorType = errorType;
+
+            elements.errorIcon.textContent = errorConfig.icon;
+            elements.errorTitle.textContent = errorConfig.title;
             elements.errorText.textContent = message;
             elements.errorMessage.classList.add('visible');
             elements.controlBtn.disabled = true;
+
+            // Show/hide retry button based on error type
+            elements.errorRetryBtn.style.display = errorConfig.canRetry ? 'block' : 'none';
+
+            // Store help text for the help button
+            elements.errorHelpBtn.dataset.helpText = errorConfig.helpText;
         }
 
         /**
@@ -732,6 +931,54 @@
          */
         function hideError() {
             elements.errorMessage.classList.remove('visible');
+            currentErrorType = null;
+        }
+
+        /**
+         * Show warning toast for transient messages
+         */
+        function showWarningToast(message, duration = 3000) {
+            elements.warningToast.textContent = message;
+            elements.warningToast.classList.add('visible');
+
+            setTimeout(() => {
+                elements.warningToast.classList.remove('visible');
+            }, duration);
+        }
+
+        /**
+         * Show/hide face warning overlay
+         */
+        function showFaceWarning(message) {
+            elements.faceWarningText.textContent = message;
+            elements.faceWarningOverlay.classList.add('visible');
+        }
+
+        function hideFaceWarning() {
+            elements.faceWarningOverlay.classList.remove('visible');
+        }
+
+        /**
+         * Check browser compatibility
+         */
+        function checkBrowserCompatibility() {
+            // Check for getUserMedia support
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showError(
+                    'Your browser doesn\'t support camera access. Please use a modern browser like Chrome, Firefox, or Edge.',
+                    'BROWSER_NOT_SUPPORTED'
+                );
+                return false;
+            }
+
+            // Check for WebGL support (needed for MediaPipe GPU delegate)
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (!gl) {
+                console.warn('WebGL not supported, will use CPU fallback');
+            }
+
+            return true;
         }
 
         /**
@@ -791,19 +1038,31 @@
                 console.error('Camera initialization failed:', error);
                 isCameraReady = false;
 
-                // Handle specific error types
+                // Handle specific error types with appropriate error type
                 if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-                    showError('Camera access denied. Please allow camera access and refresh the page.');
+                    showError(
+                        'Camera access was denied. Please allow camera access in your browser settings.',
+                        'CAMERA_DENIED'
+                    );
                 } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
-                    showError('No camera found. Please connect a camera and refresh the page.');
+                    showError(
+                        'No camera was found on your device. Please connect a camera and try again.',
+                        'CAMERA_NOT_FOUND'
+                    );
                 } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-                    showError('Camera is in use by another application. Please close other apps using the camera.');
+                    showError(
+                        'Your camera is being used by another application. Please close other apps using the camera.',
+                        'CAMERA_IN_USE'
+                    );
                 } else if (error.name === 'OverconstrainedError') {
                     // Try again with less strict constraints
                     console.log('Constraints too strict, retrying with basic constraints...');
                     return await initializeCameraBasic();
                 } else {
-                    showError(`Camera error: ${error.message || 'Unknown error occurred'}`);
+                    showError(
+                        `Camera error: ${error.message || 'An unknown error occurred while accessing the camera.'}`,
+                        'CAMERA_ERROR'
+                    );
                 }
 
                 return false;
@@ -842,7 +1101,10 @@
                 return true;
             } catch (error) {
                 console.error('Basic camera initialization also failed:', error);
-                showError('Unable to access camera. Please check your browser settings.');
+                showError(
+                    'Unable to access the camera. Please check your browser settings and permissions.',
+                    'CAMERA_ERROR'
+                );
                 return false;
             }
         }
@@ -955,6 +1217,10 @@
                     ? results.facialTransformationMatrixes[0]
                     : null;
 
+                // Face detected - reset no face timer and hide warning
+                noFaceDetectedStartTime = null;
+                hideFaceWarning();
+
                 // Update face guide to show detected state (only when not in active challenge)
                 if (!ChallengeManager.isActive()) {
                     elements.faceGuide.classList.add('detected');
@@ -980,11 +1246,29 @@
                 drawFaceLandmarks(ctx, landmarks);
             } else {
                 // No face detected
+                const now = performance.now();
+
+                // Track how long no face has been detected
+                if (noFaceDetectedStartTime === null) {
+                    noFaceDetectedStartTime = now;
+                }
+
+                const noFaceDuration = now - noFaceDetectedStartTime;
+
                 if (!ChallengeManager.isActive()) {
                     elements.faceGuide.classList.remove('detected');
                     elements.faceGuide.classList.remove('warning');
                     updateStatus('No face detected - Position your face in the oval');
+
+                    // Show warning overlay after extended period of no face detection
+                    if (noFaceDuration > NO_FACE_WARNING_DELAY) {
+                        showFaceWarning('No face detected');
+                    }
+                } else {
+                    // During active challenge, show more urgent warning
+                    showFaceWarning('Face lost - Look at the camera');
                 }
+
                 currentFaceResults = null;
             }
         }
@@ -3261,37 +3545,120 @@
             };
         })();
 
-        // Initialize the app on page load
-        document.addEventListener('DOMContentLoaded', async () => {
+        // Track face detection state for warnings
+        let noFaceDetectedStartTime = null;
+        const NO_FACE_WARNING_DELAY = 3000; // Show warning after 3 seconds of no face
+
+        /**
+         * Initialize the application with timeout and error handling
+         */
+        async function initializeApp() {
             console.log('Liveness Detection App - Initializing...');
 
             // Disable button until both camera and model are ready
             elements.controlBtn.disabled = true;
 
-            // Initialize camera and model in parallel for faster startup
-            const [cameraResult, modelResult] = await Promise.all([
-                initializeCamera(),
-                initializeFaceLandmarker()
-            ]);
-
-            // Check if both initialized successfully
-            if (cameraResult && modelResult) {
-                checkAndEnableStartButton();
-                // Start detection loop immediately for face positioning feedback
-                startDetectionLoop();
-            } else {
-                if (!cameraResult) {
-                    console.error('Camera initialization failed');
-                }
-                if (!modelResult) {
-                    console.error('Model initialization failed');
-                }
+            // Check browser compatibility first
+            if (!checkBrowserCompatibility()) {
+                return;
             }
+
+            // Set up initialization timeout (30 seconds)
+            const INIT_TIMEOUT = 30000;
+            let initTimedOut = false;
+
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => {
+                    initTimedOut = true;
+                    reject(new Error('Initialization timeout'));
+                }, INIT_TIMEOUT);
+            });
+
+            try {
+                // Initialize camera and model in parallel with timeout
+                const initPromise = Promise.all([
+                    initializeCamera(),
+                    initializeFaceLandmarker()
+                ]);
+
+                const [cameraResult, modelResult] = await Promise.race([
+                    initPromise,
+                    timeoutPromise
+                ]);
+
+                // Check if both initialized successfully
+                if (cameraResult && modelResult) {
+                    hideError();
+                    checkAndEnableStartButton();
+                    // Start detection loop immediately for face positioning feedback
+                    startDetectionLoop();
+                } else {
+                    if (!cameraResult) {
+                        console.error('Camera initialization failed');
+                    }
+                    if (!modelResult) {
+                        console.error('Model initialization failed');
+                    }
+                }
+            } catch (error) {
+                if (initTimedOut) {
+                    showError(
+                        'The app is taking too long to initialize. Please check your internet connection and try again.',
+                        'INITIALIZATION_TIMEOUT'
+                    );
+                }
+                console.error('Initialization error:', error);
+            }
+        }
+
+        /**
+         * Retry initialization after an error
+         */
+        async function retryInitialization() {
+            console.log('Retrying initialization...');
+            hideError();
+            updateStatus('Retrying...');
+
+            // Stop any existing streams
+            stopCamera();
+
+            // Reset state
+            isModelReady = false;
+            isModelLoading = false;
+            isCameraReady = false;
+            faceLandmarker = null;
+
+            // Reinitialize
+            await initializeApp();
+        }
+
+        // Initialize the app on page load
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Initialize app
+            await initializeApp();
+
+            // Error retry button click handler
+            elements.errorRetryBtn.addEventListener('click', async () => {
+                await retryInitialization();
+            });
+
+            // Error help button click handler
+            elements.errorHelpBtn.addEventListener('click', () => {
+                const helpText = elements.errorHelpBtn.dataset.helpText || 'Please check your camera settings and refresh the page.';
+                alert(helpText);
+            });
 
             // Control button click handler
             elements.controlBtn.addEventListener('click', () => {
                 if (!isAppReady()) {
                     console.error('App not ready');
+                    showWarningToast('Please wait for initialization to complete');
+                    return;
+                }
+
+                // Check if face is detected before starting
+                if (!currentFaceResults || !currentFaceResults.faceLandmarks || currentFaceResults.faceLandmarks.length === 0) {
+                    showWarningToast('Please position your face in the oval first');
                     return;
                 }
 
@@ -3308,6 +3675,9 @@
             elements.retryBtn.addEventListener('click', () => {
                 // Reset ChallengeManager and restart
                 ChallengeManager.reset();
+
+                // Hide face warning if visible
+                hideFaceWarning();
 
                 // Ensure detection loop is running
                 if (!isDetectionRunning) {
