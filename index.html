@@ -478,6 +478,12 @@
         let videoStream = null;
         let isCameraReady = false;
 
+        // Detection loop state
+        let isDetectionRunning = false;
+        let detectionAnimationId = null;
+        let lastDetectionTime = 0;
+        let currentFaceResults = null;
+
         /**
          * Initialize FaceLandmarker with GPU delegate
          * Loads the model from CDN and configures it for face detection with blendshapes
@@ -737,6 +743,253 @@
             }
         }
 
+        /**
+         * Main detection loop using requestAnimationFrame
+         * Continuously processes video frames for face detection
+         */
+        function detectionLoop(timestamp) {
+            if (!isDetectionRunning) {
+                return;
+            }
+
+            // Check if video is ready and playing
+            if (!isCameraInitialized() || elements.video.paused || elements.video.ended) {
+                detectionAnimationId = requestAnimationFrame(detectionLoop);
+                return;
+            }
+
+            // Run face detection
+            if (isFaceLandmarkerReady()) {
+                try {
+                    // Detect faces in the current video frame
+                    // Use performance.now() for VIDEO running mode
+                    const startTime = performance.now();
+                    currentFaceResults = faceLandmarker.detectForVideo(elements.video, startTime);
+                    lastDetectionTime = startTime;
+
+                    // Process detection results
+                    processDetectionResults(currentFaceResults);
+                } catch (error) {
+                    console.error('Detection error:', error);
+                }
+            }
+
+            // Schedule next frame
+            detectionAnimationId = requestAnimationFrame(detectionLoop);
+        }
+
+        /**
+         * Process face detection results
+         * Updates UI based on whether a face is detected and its position
+         */
+        function processDetectionResults(results) {
+            const ctx = elements.canvas.getContext('2d');
+
+            // Clear previous drawings
+            ctx.clearRect(0, 0, elements.canvas.width, elements.canvas.height);
+
+            // Check if a face was detected
+            if (results && results.faceLandmarks && results.faceLandmarks.length > 0) {
+                const landmarks = results.faceLandmarks[0];
+                const blendshapes = results.faceBlendshapes && results.faceBlendshapes.length > 0
+                    ? results.faceBlendshapes[0].categories
+                    : null;
+                const transformMatrix = results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0
+                    ? results.facialTransformationMatrixes[0]
+                    : null;
+
+                // Update face guide to show detected state
+                elements.faceGuide.classList.add('detected');
+                elements.faceGuide.classList.remove('warning');
+
+                // Check if face is well-positioned
+                const facePosition = checkFacePosition(landmarks);
+                if (!facePosition.isWellPositioned) {
+                    elements.faceGuide.classList.add('warning');
+                    elements.faceGuide.classList.remove('detected');
+                    updateStatus(facePosition.message);
+                } else {
+                    updateStatus('Face detected - Ready');
+                }
+
+                // Draw face landmarks on canvas (mirrored to match video)
+                drawFaceLandmarks(ctx, landmarks);
+            } else {
+                // No face detected
+                elements.faceGuide.classList.remove('detected');
+                elements.faceGuide.classList.remove('warning');
+                updateStatus('No face detected - Position your face in the oval');
+                currentFaceResults = null;
+            }
+        }
+
+        /**
+         * Check if the face is well-positioned within the guide oval
+         * Returns position status and guidance message
+         */
+        function checkFacePosition(landmarks) {
+            // Get face bounding box from landmarks
+            // Nose tip (landmark 1) as center reference
+            const noseTip = landmarks[1];
+
+            // Calculate face bounds
+            let minX = 1, maxX = 0, minY = 1, maxY = 0;
+            landmarks.forEach(point => {
+                minX = Math.min(minX, point.x);
+                maxX = Math.max(maxX, point.x);
+                minY = Math.min(minY, point.y);
+                maxY = Math.max(maxY, point.y);
+            });
+
+            const faceWidth = maxX - minX;
+            const faceHeight = maxY - minY;
+            const faceCenterX = (minX + maxX) / 2;
+            const faceCenterY = (minY + maxY) / 2;
+
+            // Define acceptable ranges (normalized 0-1)
+            const centerTolerance = 0.15;
+            const minFaceSize = 0.25;
+            const maxFaceSize = 0.75;
+
+            // Check horizontal centering (note: x is mirrored)
+            if (Math.abs(faceCenterX - 0.5) > centerTolerance) {
+                const direction = faceCenterX < 0.5 ? 'right' : 'left';
+                return { isWellPositioned: false, message: `Move your face ${direction}` };
+            }
+
+            // Check vertical centering
+            if (Math.abs(faceCenterY - 0.5) > centerTolerance) {
+                const direction = faceCenterY < 0.5 ? 'down' : 'up';
+                return { isWellPositioned: false, message: `Move your face ${direction}` };
+            }
+
+            // Check face size (too far or too close)
+            if (faceWidth < minFaceSize || faceHeight < minFaceSize) {
+                return { isWellPositioned: false, message: 'Move closer to the camera' };
+            }
+
+            if (faceWidth > maxFaceSize || faceHeight > maxFaceSize) {
+                return { isWellPositioned: false, message: 'Move further from the camera' };
+            }
+
+            return { isWellPositioned: true, message: 'Face detected - Ready' };
+        }
+
+        /**
+         * Draw face landmarks on the canvas
+         * Draws contours for face mesh visualization
+         */
+        function drawFaceLandmarks(ctx, landmarks) {
+            const width = elements.canvas.width;
+            const height = elements.canvas.height;
+
+            // Save context state
+            ctx.save();
+
+            // Mirror the canvas to match the mirrored video
+            ctx.translate(width, 0);
+            ctx.scale(-1, 1);
+
+            // Set drawing style
+            ctx.fillStyle = 'rgba(74, 144, 217, 0.6)';
+            ctx.strokeStyle = 'rgba(74, 144, 217, 0.8)';
+            ctx.lineWidth = 1;
+
+            // Draw key facial contours
+            const contours = {
+                // Face oval
+                faceOval: [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10],
+                // Left eye
+                leftEye: [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 33],
+                // Right eye
+                rightEye: [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398, 362],
+                // Lips outer
+                lipsOuter: [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61]
+            };
+
+            // Draw each contour
+            Object.values(contours).forEach(indices => {
+                ctx.beginPath();
+                indices.forEach((index, i) => {
+                    const point = landmarks[index];
+                    const x = point.x * width;
+                    const y = point.y * height;
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                });
+                ctx.stroke();
+            });
+
+            // Draw landmark points for key features
+            const keyPoints = [1, 33, 133, 362, 263, 61, 291]; // Nose, eyes, mouth corners
+            keyPoints.forEach(index => {
+                const point = landmarks[index];
+                const x = point.x * width;
+                const y = point.y * height;
+                ctx.beginPath();
+                ctx.arc(x, y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Restore context state
+            ctx.restore();
+        }
+
+        /**
+         * Start the detection loop
+         */
+        function startDetectionLoop() {
+            if (isDetectionRunning) {
+                console.log('Detection loop already running');
+                return;
+            }
+
+            if (!isAppReady()) {
+                console.error('Cannot start detection: app not ready');
+                return;
+            }
+
+            isDetectionRunning = true;
+            console.log('Starting detection loop');
+            detectionAnimationId = requestAnimationFrame(detectionLoop);
+        }
+
+        /**
+         * Stop the detection loop
+         */
+        function stopDetectionLoop() {
+            isDetectionRunning = false;
+
+            if (detectionAnimationId) {
+                cancelAnimationFrame(detectionAnimationId);
+                detectionAnimationId = null;
+            }
+
+            // Clear canvas
+            const ctx = elements.canvas.getContext('2d');
+            ctx.clearRect(0, 0, elements.canvas.width, elements.canvas.height);
+
+            console.log('Detection loop stopped');
+        }
+
+        /**
+         * Get the current face detection results
+         * Used by other modules (BlinkDetector, HeadMovementDetector, etc.)
+         */
+        function getCurrentFaceResults() {
+            return currentFaceResults;
+        }
+
+        /**
+         * Check if detection is currently running
+         */
+        function isDetectionActive() {
+            return isDetectionRunning;
+        }
+
         // Initialize the app on page load
         document.addEventListener('DOMContentLoaded', async () => {
             console.log('Liveness Detection App - Initializing...');
@@ -753,6 +1006,8 @@
             // Check if both initialized successfully
             if (cameraResult && modelResult) {
                 checkAndEnableStartButton();
+                // Start detection loop immediately for face positioning feedback
+                startDetectionLoop();
             } else {
                 if (!cameraResult) {
                     console.error('Camera initialization failed');
@@ -761,6 +1016,33 @@
                     console.error('Model initialization failed');
                 }
             }
+
+            // Control button click handler
+            elements.controlBtn.addEventListener('click', () => {
+                if (!isAppReady()) {
+                    console.error('App not ready');
+                    return;
+                }
+
+                // Start detection if not running
+                if (!isDetectionRunning) {
+                    startDetectionLoop();
+                }
+
+                // Button will be used to start verification challenges
+                // (Challenge state machine will be implemented in Task 10)
+                console.log('Verification started');
+                updateStatus('Verification in progress...');
+            });
+
+            // Retry button click handler
+            elements.retryBtn.addEventListener('click', () => {
+                // Reset and restart (full implementation in later tasks)
+                elements.resultScreen.classList.remove('visible');
+                elements.challengePanel.classList.remove('hidden');
+                elements.controlBtn.classList.remove('hidden');
+                startDetectionLoop();
+            });
         });
     </script>
 </body>
