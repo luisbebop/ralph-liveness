@@ -2104,8 +2104,8 @@
 
                 // Check yaw (left/right)
                 if (Math.abs(yawDelta) >= config.yawThreshold) {
-                    // Positive yaw = turned right (nose points to viewer's left due to mirroring)
-                    return yawDelta > 0 ? 'right' : 'left';
+                    // Positive yaw = turned left (nose moves right in raw coords, but video is mirrored)
+                    return yawDelta > 0 ? 'left' : 'right';
                 }
 
                 // Check pitch (up/down)
@@ -2126,9 +2126,9 @@
 
                 switch (currentDirection) {
                     case 'left':
-                        return yawDelta <= -config.yawThreshold + config.holdTolerance;
-                    case 'right':
                         return yawDelta >= config.yawThreshold - config.holdTolerance;
+                    case 'right':
+                        return yawDelta <= -config.yawThreshold + config.holdTolerance;
                     case 'up':
                         return pitchDelta <= -config.pitchThreshold + config.holdTolerance;
                     case 'down':
