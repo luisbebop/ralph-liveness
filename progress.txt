@@ -105,3 +105,28 @@
 - Status display now shows real-time EAR value for debugging
 - Public API: processFrame(), reset(), getBlinkCount(), getCurrentEAR(), getCurrentBlendshapes(), isCurrentlyBlinking(), setConfig(), getConfig()
 - Commit: 0efb348
+
+#### Task 8: HeadMovementDetector - Yaw/pitch from nose tip vs eye positions - COMPLETED
+- Implemented HeadMovementDetector as an IIFE module (same pattern as BlinkDetector)
+- Added yaw (left/right rotation) calculation using:
+  - Nose tip horizontal offset relative to eye midpoint
+  - Normalized by eye width for scale-invariance
+  - Z-depth difference as additional signal
+- Added pitch (up/down tilt) calculation using:
+  - Nose tip vertical position relative to nose bridge and chin
+  - Normalized by face height for scale-invariance
+  - Z-depth as additional signal
+- Implemented auto-calibration system:
+  - Collects 30 frames of baseline samples
+  - Calculates average baseline yaw/pitch
+  - Can be manually recalibrated with calibrate()
+- Detection thresholds per PRD:
+  - Yaw threshold: 15° from baseline
+  - Pitch threshold: 12° from baseline
+  - Hold duration: 500ms
+- Added exponential smoothing (factor: 0.3) to reduce noise
+- Hold detection with 5° tolerance for position drift
+- Integrated into processDetectionResults() for real-time processing
+- Status display now shows yaw and pitch values for debugging
+- Public API: processFrame(), reset(), resetCalibration(), calibrate(), isCalibrated(), getCurrentAngles(), getBaseline(), getHoldProgress(), getHoldDirection(), getMovementHistory(), setConfig(), getConfig()
+- Commit: 89baa8e
