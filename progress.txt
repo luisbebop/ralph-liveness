@@ -344,3 +344,11 @@
   - Removed deprecated `const { FaceLandmarker, FilesetResolver } = vision;` destructuring
   - Updated WASM path to match the new version
 - Commit: 27872d3
+
+#### Fix 2: Head movement detection too strict - COMPLETED
+- Issue: Users found head turn (left/right) and head tilt (up/down) challenges too difficult to complete
+- Solution: Relaxed detection thresholds in HeadMovementDetector config
+  - Reduced yawThreshold from 15° to 10° (for left/right head turns)
+  - Reduced pitchThreshold from 12° to 8° (for up/down head tilts)
+- This makes head movement challenges approximately 33% easier while still requiring meaningful movement
+- Commit: c12b356
