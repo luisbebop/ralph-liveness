@@ -287,9 +287,18 @@
             display: block;
         }
 
+        .result-screen.failure .result-icon {
+            color: var(--error-color);
+        }
+
+        .result-screen.failure .result-title {
+            color: var(--error-color);
+        }
+
         .result-icon {
             font-size: 4rem;
             margin-bottom: 16px;
+            color: var(--success-color);
         }
 
         .result-title {
@@ -797,6 +806,11 @@
             // Process expression detection
             const expressionResult = ExpressionDetector.processFrame(results);
 
+            // Pass detection results to ChallengeManager if verification is active
+            if (ChallengeManager.isActive()) {
+                ChallengeManager.processFrame(results, blinkResult, headResult, expressionResult);
+            }
+
             // Check if a face was detected
             if (results && results.faceLandmarks && results.faceLandmarks.length > 0) {
                 const landmarks = results.faceLandmarks[0];
@@ -807,32 +821,36 @@
                     ? results.facialTransformationMatrixes[0]
                     : null;
 
-                // Update face guide to show detected state
-                elements.faceGuide.classList.add('detected');
-                elements.faceGuide.classList.remove('warning');
+                // Update face guide to show detected state (only when not in active challenge)
+                if (!ChallengeManager.isActive()) {
+                    elements.faceGuide.classList.add('detected');
+                    elements.faceGuide.classList.remove('warning');
 
-                // Check if face is well-positioned
-                const facePosition = checkFacePosition(landmarks);
-                if (!facePosition.isWellPositioned) {
-                    elements.faceGuide.classList.add('warning');
-                    elements.faceGuide.classList.remove('detected');
-                    updateStatus(facePosition.message);
-                } else {
-                    // Show expression values for debugging/feedback
-                    const smileDisplay = (expressionResult.values.smile * 100).toFixed(0);
-                    const mouthDisplay = (expressionResult.values.mouthOpen * 100).toFixed(0);
-                    const browDisplay = (expressionResult.values.eyebrowRaise * 100).toFixed(0);
-                    const calibStatus = headResult.isCalibrated ? '' : ' (calibrating...)';
-                    updateStatus(`Smile: ${smileDisplay}% | Mouth: ${mouthDisplay}% | Brow: ${browDisplay}%${calibStatus}`);
+                    // Check if face is well-positioned
+                    const facePosition = checkFacePosition(landmarks);
+                    if (!facePosition.isWellPositioned) {
+                        elements.faceGuide.classList.add('warning');
+                        elements.faceGuide.classList.remove('detected');
+                        updateStatus(facePosition.message);
+                    } else {
+                        // Show expression values for debugging/feedback
+                        const smileDisplay = (expressionResult.values.smile * 100).toFixed(0);
+                        const mouthDisplay = (expressionResult.values.mouthOpen * 100).toFixed(0);
+                        const browDisplay = (expressionResult.values.eyebrowRaise * 100).toFixed(0);
+                        const calibStatus = headResult.isCalibrated ? '' : ' (calibrating...)';
+                        updateStatus(`Smile: ${smileDisplay}% | Mouth: ${mouthDisplay}% | Brow: ${browDisplay}%${calibStatus}`);
+                    }
                 }
 
                 // Draw face landmarks on canvas (mirrored to match video)
                 drawFaceLandmarks(ctx, landmarks);
             } else {
                 // No face detected
-                elements.faceGuide.classList.remove('detected');
-                elements.faceGuide.classList.remove('warning');
-                updateStatus('No face detected - Position your face in the oval');
+                if (!ChallengeManager.isActive()) {
+                    elements.faceGuide.classList.remove('detected');
+                    elements.faceGuide.classList.remove('warning');
+                    updateStatus('No face detected - Position your face in the oval');
+                }
                 currentFaceResults = null;
             }
         }
@@ -2175,6 +2193,686 @@
             };
         })();
 
+        // =====================================================
+        // CHALLENGE MANAGER MODULE
+        // State machine for managing liveness verification challenges
+        // States: INITIALIZING → CALIBRATING → PRESENTING → DETECTING → SUCCESS/FAILURE → COMPLETED
+        // =====================================================
+
+        const ChallengeManager = (function() {
+            // State constants
+            const States = {
+                INITIALIZING: 'INITIALIZING',
+                CALIBRATING: 'CALIBRATING',
+                PRESENTING: 'PRESENTING',
+                DETECTING: 'DETECTING',
+                SUCCESS: 'SUCCESS',
+                FAILURE: 'FAILURE',
+                COMPLETED: 'COMPLETED'
+            };
+
+            // Challenge type definitions
+            const ChallengeTypes = {
+                BLINK: {
+                    id: 'blink',
+                    name: 'Blink Your Eyes',
+                    hint: 'Blink naturally 2-3 times',
+                    icon: '👁',
+                    detector: 'blink',
+                    requiresHold: false,
+                    targetCount: 2
+                },
+                TURN_LEFT: {
+                    id: 'turn_left',
+                    name: 'Turn Head Left',
+                    hint: 'Turn your head to the left and hold',
+                    icon: '👈',
+                    detector: 'head',
+                    requiresHold: true,
+                    direction: 'left'
+                },
+                TURN_RIGHT: {
+                    id: 'turn_right',
+                    name: 'Turn Head Right',
+                    hint: 'Turn your head to the right and hold',
+                    icon: '👉',
+                    detector: 'head',
+                    requiresHold: true,
+                    direction: 'right'
+                },
+                LOOK_UP: {
+                    id: 'look_up',
+                    name: 'Look Up',
+                    hint: 'Tilt your head up and hold',
+                    icon: '👆',
+                    detector: 'head',
+                    requiresHold: true,
+                    direction: 'up'
+                },
+                LOOK_DOWN: {
+                    id: 'look_down',
+                    name: 'Look Down',
+                    hint: 'Tilt your head down and hold',
+                    icon: '👇',
+                    detector: 'head',
+                    requiresHold: true,
+                    direction: 'down'
+                },
+                SMILE: {
+                    id: 'smile',
+                    name: 'Smile',
+                    hint: 'Give a big smile and hold',
+                    icon: '😊',
+                    detector: 'expression',
+                    requiresHold: true,
+                    expression: 'smile'
+                },
+                OPEN_MOUTH: {
+                    id: 'open_mouth',
+                    name: 'Open Your Mouth',
+                    hint: 'Open your mouth wide and hold',
+                    icon: '😮',
+                    detector: 'expression',
+                    requiresHold: true,
+                    expression: 'mouthOpen'
+                },
+                RAISE_EYEBROWS: {
+                    id: 'raise_eyebrows',
+                    name: 'Raise Eyebrows',
+                    hint: 'Raise your eyebrows and hold',
+                    icon: '😲',
+                    detector: 'expression',
+                    requiresHold: true,
+                    expression: 'eyebrowRaise'
+                }
+            };
+
+            // Configuration
+            const config = {
+                // Number of challenges per session
+                totalChallenges: 4,
+                // Time allowed per challenge in milliseconds
+                challengeTimeout: 5000,
+                // Time to display success message before moving to next challenge
+                successDisplayDuration: 800,
+                // Time to display failure message before retry
+                failureDisplayDuration: 1000,
+                // Calibration duration in milliseconds
+                calibrationDuration: 2000,
+                // Minimum time between state transitions (anti-spoofing)
+                minTransitionDelay: 300,
+                // Presentation delay before detection starts
+                presentationDelay: 1000
+            };
+
+            // State
+            let state = {
+                currentState: States.INITIALIZING,
+                currentChallengeIndex: 0,
+                challenges: [],
+                completedChallenges: [],
+                challengeStartTime: null,
+                stateStartTime: null,
+                lastStateChangeTime: 0,
+                blinkCountAtStart: 0,
+                isActive: false,
+                failureReason: null
+            };
+
+            // Available challenge pool (excludes certain types for variety)
+            const challengePool = [
+                ChallengeTypes.BLINK,
+                ChallengeTypes.TURN_LEFT,
+                ChallengeTypes.TURN_RIGHT,
+                ChallengeTypes.LOOK_UP,
+                ChallengeTypes.LOOK_DOWN,
+                ChallengeTypes.SMILE,
+                ChallengeTypes.OPEN_MOUTH,
+                ChallengeTypes.RAISE_EYEBROWS
+            ];
+
+            /**
+             * Generate a random set of challenges with variety enforcement
+             * Ensures no two consecutive challenges are too similar
+             */
+            function generateChallenges(count) {
+                const selected = [];
+                const availablePool = [...challengePool];
+
+                for (let i = 0; i < count; i++) {
+                    // Filter out similar challenges to the last selected one
+                    let candidates = availablePool;
+
+                    if (selected.length > 0) {
+                        const lastChallenge = selected[selected.length - 1];
+                        candidates = availablePool.filter(c => {
+                            // Don't allow same detector type consecutively
+                            if (c.detector === lastChallenge.detector) {
+                                // Exception: allow different head directions
+                                if (c.detector === 'head' && c.direction !== lastChallenge.direction) {
+                                    return true;
+                                }
+                                // Exception: allow different expressions
+                                if (c.detector === 'expression' && c.expression !== lastChallenge.expression) {
+                                    return true;
+                                }
+                                return false;
+                            }
+                            return true;
+                        });
+
+                        // If no candidates left, use full pool
+                        if (candidates.length === 0) {
+                            candidates = availablePool;
+                        }
+                    }
+
+                    // Random selection from candidates
+                    const randomIndex = Math.floor(Math.random() * candidates.length);
+                    const challenge = candidates[randomIndex];
+                    selected.push(challenge);
+
+                    // Remove selected challenge from pool to avoid duplicates
+                    const poolIndex = availablePool.findIndex(c => c.id === challenge.id);
+                    if (poolIndex > -1) {
+                        availablePool.splice(poolIndex, 1);
+                    }
+
+                    // Refill pool if needed
+                    if (availablePool.length === 0) {
+                        availablePool.push(...challengePool.filter(c =>
+                            !selected.slice(-3).some(s => s.id === c.id)
+                        ));
+                    }
+                }
+
+                return selected;
+            }
+
+            /**
+             * Transition to a new state
+             */
+            function transitionTo(newState) {
+                const now = performance.now();
+
+                // Enforce minimum transition delay for anti-spoofing
+                if (now - state.lastStateChangeTime < config.minTransitionDelay) {
+                    return false;
+                }
+
+                const previousState = state.currentState;
+                state.currentState = newState;
+                state.stateStartTime = now;
+                state.lastStateChangeTime = now;
+
+                console.log(`ChallengeManager: ${previousState} → ${newState}`);
+
+                // Handle state entry actions
+                onStateEnter(newState);
+
+                return true;
+            }
+
+            /**
+             * Handle state entry actions
+             */
+            function onStateEnter(newState) {
+                switch (newState) {
+                    case States.INITIALIZING:
+                        updateUI('Initializing...', '', '');
+                        break;
+
+                    case States.CALIBRATING:
+                        updateUI('Hold still...', 'Calibrating', 'Keep your face centered in the oval');
+                        HeadMovementDetector.resetCalibration();
+                        break;
+
+                    case States.PRESENTING:
+                        presentCurrentChallenge();
+                        break;
+
+                    case States.DETECTING:
+                        state.challengeStartTime = performance.now();
+                        startChallengeTimer();
+                        // Record blink count for blink challenges
+                        state.blinkCountAtStart = BlinkDetector.getBlinkCount();
+                        break;
+
+                    case States.SUCCESS:
+                        handleChallengeSuccess();
+                        break;
+
+                    case States.FAILURE:
+                        handleChallengeFailure();
+                        break;
+
+                    case States.COMPLETED:
+                        handleVerificationComplete();
+                        break;
+                }
+            }
+
+            /**
+             * Present the current challenge to the user
+             */
+            function presentCurrentChallenge() {
+                const challenge = state.challenges[state.currentChallengeIndex];
+                if (!challenge) return;
+
+                // Update UI with challenge info
+                elements.challengeNumber.textContent = state.currentChallengeIndex + 1;
+                elements.challengeIcon.textContent = challenge.icon;
+                elements.challengeName.textContent = challenge.name;
+                elements.challengeHint.textContent = challenge.hint;
+                elements.challengeTimer.textContent = `${(config.challengeTimeout / 1000).toFixed(0)}s remaining`;
+                elements.progressFill.style.width = '0%';
+                elements.holdPercent.textContent = '0%';
+
+                // Update progress indicators
+                updateProgressIndicators();
+
+                // Show challenge panel
+                elements.challengePanel.classList.remove('hidden');
+
+                // Reset detectors for the new challenge
+                if (challenge.detector === 'blink') {
+                    BlinkDetector.reset();
+                } else if (challenge.detector === 'head') {
+                    HeadMovementDetector.reset();
+                } else if (challenge.detector === 'expression') {
+                    ExpressionDetector.reset();
+                }
+
+                // Transition to detecting after presentation delay
+                setTimeout(() => {
+                    if (state.currentState === States.PRESENTING) {
+                        transitionTo(States.DETECTING);
+                    }
+                }, config.presentationDelay);
+            }
+
+            /**
+             * Start the challenge timer countdown
+             */
+            let timerInterval = null;
+            function startChallengeTimer() {
+                // Clear any existing timer
+                if (timerInterval) {
+                    clearInterval(timerInterval);
+                }
+
+                timerInterval = setInterval(() => {
+                    if (state.currentState !== States.DETECTING) {
+                        clearInterval(timerInterval);
+                        return;
+                    }
+
+                    const elapsed = performance.now() - state.challengeStartTime;
+                    const remaining = Math.max(0, config.challengeTimeout - elapsed);
+                    const seconds = Math.ceil(remaining / 1000);
+
+                    elements.challengeTimer.textContent = `${seconds}s remaining`;
+
+                    // Check for timeout
+                    if (remaining <= 0) {
+                        clearInterval(timerInterval);
+                        state.failureReason = 'timeout';
+                        transitionTo(States.FAILURE);
+                    }
+                }, 100);
+            }
+
+            /**
+             * Update progress indicators to show completed challenges
+             */
+            function updateProgressIndicators() {
+                elements.indicators.forEach((indicator, index) => {
+                    indicator.classList.remove('active', 'completed');
+
+                    if (index < state.currentChallengeIndex) {
+                        indicator.classList.add('completed');
+                    } else if (index === state.currentChallengeIndex) {
+                        indicator.classList.add('active');
+                    }
+                });
+            }
+
+            /**
+             * Handle successful challenge completion
+             */
+            function handleChallengeSuccess() {
+                clearInterval(timerInterval);
+
+                const challenge = state.challenges[state.currentChallengeIndex];
+                state.completedChallenges.push(challenge);
+
+                // Update UI to show success
+                elements.faceGuide.classList.add('detected');
+                elements.faceGuide.classList.remove('warning');
+                elements.progressFill.style.width = '100%';
+                elements.holdPercent.textContent = '100%';
+                updateStatus('Challenge completed!');
+
+                // Mark indicator as completed
+                elements.indicators[state.currentChallengeIndex].classList.add('completed');
+                elements.indicators[state.currentChallengeIndex].classList.remove('active');
+
+                // Move to next challenge or complete
+                setTimeout(() => {
+                    state.currentChallengeIndex++;
+
+                    if (state.currentChallengeIndex >= state.challenges.length) {
+                        transitionTo(States.COMPLETED);
+                    } else {
+                        transitionTo(States.PRESENTING);
+                    }
+                }, config.successDisplayDuration);
+            }
+
+            /**
+             * Handle challenge failure
+             */
+            function handleChallengeFailure() {
+                clearInterval(timerInterval);
+
+                const reason = state.failureReason || 'unknown';
+                let message = 'Challenge failed';
+
+                switch (reason) {
+                    case 'timeout':
+                        message = 'Time expired - Try again';
+                        break;
+                    case 'face_lost':
+                        message = 'Face lost - Keep your face visible';
+                        break;
+                    default:
+                        message = 'Challenge failed - Try again';
+                }
+
+                updateStatus(message);
+                elements.faceGuide.classList.add('warning');
+                elements.faceGuide.classList.remove('detected');
+
+                // Show failure on result screen
+                elements.resultScreen.classList.add('visible');
+                elements.resultScreen.classList.add('failure');
+                elements.resultIcon.textContent = '✗';
+                elements.resultTitle.textContent = 'Verification Failed';
+                elements.resultMessage.textContent = message;
+
+                // Hide challenge panel
+                elements.challengePanel.classList.add('hidden');
+                elements.controlBtn.classList.add('hidden');
+
+                state.isActive = false;
+            }
+
+            /**
+             * Handle verification completion (all challenges passed)
+             */
+            function handleVerificationComplete() {
+                clearInterval(timerInterval);
+
+                // Update UI to show success
+                elements.resultScreen.classList.add('visible');
+                elements.resultScreen.classList.remove('failure');
+                elements.resultIcon.textContent = '✓';
+                elements.resultTitle.textContent = 'Verification Complete';
+                elements.resultMessage.textContent = 'You have been verified as a real person.';
+
+                // Hide challenge panel and control button
+                elements.challengePanel.classList.add('hidden');
+                elements.controlBtn.classList.add('hidden');
+
+                updateStatus('Verification successful!');
+                elements.faceGuide.classList.add('detected');
+                elements.faceGuide.classList.remove('warning');
+
+                state.isActive = false;
+
+                console.log('Verification completed successfully!');
+            }
+
+            /**
+             * Update UI helper function
+             */
+            function updateUI(status, challengeName, challengeHint) {
+                if (status) updateStatus(status);
+                if (challengeName) elements.challengeName.textContent = challengeName;
+                if (challengeHint) elements.challengeHint.textContent = challengeHint;
+            }
+
+            /**
+             * Process detection results from the main detection loop
+             * Call this every frame while verification is active
+             */
+            function processFrame(faceResults, blinkResult, headResult, expressionResult) {
+                if (!state.isActive) return;
+
+                const now = performance.now();
+
+                // Check for face presence
+                const hasFace = faceResults && faceResults.faceLandmarks && faceResults.faceLandmarks.length > 0;
+
+                switch (state.currentState) {
+                    case States.CALIBRATING:
+                        if (!hasFace) {
+                            updateStatus('Position your face in the oval');
+                            return;
+                        }
+
+                        // Wait for head movement calibration
+                        if (HeadMovementDetector.isCalibrated()) {
+                            const elapsed = now - state.stateStartTime;
+                            if (elapsed >= config.calibrationDuration) {
+                                transitionTo(States.PRESENTING);
+                            } else {
+                                const progress = Math.floor((elapsed / config.calibrationDuration) * 100);
+                                updateStatus(`Calibrating... ${progress}%`);
+                            }
+                        }
+                        break;
+
+                    case States.DETECTING:
+                        if (!hasFace) {
+                            state.failureReason = 'face_lost';
+                            // Give a brief grace period before failing
+                            setTimeout(() => {
+                                if (state.currentState === States.DETECTING && !currentFaceResults) {
+                                    transitionTo(States.FAILURE);
+                                }
+                            }, 500);
+                            return;
+                        }
+
+                        // Process current challenge detection
+                        const challenge = state.challenges[state.currentChallengeIndex];
+                        if (!challenge) return;
+
+                        let challengeCompleted = false;
+                        let holdProgress = 0;
+
+                        switch (challenge.detector) {
+                            case 'blink':
+                                // Check if user has blinked enough times
+                                const newBlinks = blinkResult.blinkCount - state.blinkCountAtStart;
+                                if (newBlinks >= challenge.targetCount) {
+                                    challengeCompleted = true;
+                                }
+                                // Show blink progress
+                                holdProgress = Math.min(newBlinks / challenge.targetCount, 1);
+                                updateStatus(`Blinks: ${newBlinks}/${challenge.targetCount}`);
+                                break;
+
+                            case 'head':
+                                // Check if head is turned in correct direction and held
+                                if (headResult.detectedDirection === challenge.direction) {
+                                    challengeCompleted = true;
+                                } else if (headResult.direction === challenge.direction) {
+                                    holdProgress = headResult.holdProgress;
+                                    const percent = Math.floor(holdProgress * 100);
+                                    updateStatus(`Hold... ${percent}%`);
+                                } else {
+                                    const yaw = headResult.yawFromBaseline?.toFixed(1) || '0';
+                                    const pitch = headResult.pitchFromBaseline?.toFixed(1) || '0';
+                                    updateStatus(`Yaw: ${yaw}° | Pitch: ${pitch}°`);
+                                }
+                                break;
+
+                            case 'expression':
+                                // Check if expression is detected and held
+                                const expr = expressionResult.expressions[challenge.expression];
+                                if (expr && expr.detected) {
+                                    challengeCompleted = true;
+                                } else if (expr && expr.isHolding) {
+                                    holdProgress = expr.holdProgress;
+                                    const percent = Math.floor(holdProgress * 100);
+                                    updateStatus(`Hold... ${percent}%`);
+                                } else {
+                                    const value = expressionResult.values[challenge.expression];
+                                    const percent = Math.floor(value * 100);
+                                    updateStatus(`${challenge.name}: ${percent}%`);
+                                }
+                                break;
+                        }
+
+                        // Update progress bar
+                        elements.progressFill.style.width = `${holdProgress * 100}%`;
+                        elements.holdPercent.textContent = `${Math.floor(holdProgress * 100)}%`;
+
+                        // Check if challenge completed
+                        if (challengeCompleted) {
+                            transitionTo(States.SUCCESS);
+                        }
+                        break;
+                }
+            }
+
+            /**
+             * Start the verification process
+             */
+            function start() {
+                console.log('ChallengeManager: Starting verification');
+
+                // Generate random challenges
+                state.challenges = generateChallenges(config.totalChallenges);
+                state.currentChallengeIndex = 0;
+                state.completedChallenges = [];
+                state.isActive = true;
+                state.failureReason = null;
+
+                console.log('Generated challenges:', state.challenges.map(c => c.name));
+
+                // Reset all detectors
+                BlinkDetector.reset();
+                HeadMovementDetector.resetCalibration();
+                ExpressionDetector.reset();
+
+                // Hide result screen, show challenge panel
+                elements.resultScreen.classList.remove('visible');
+                elements.resultScreen.classList.remove('failure');
+                elements.challengePanel.classList.remove('hidden');
+                elements.controlBtn.classList.add('hidden');
+
+                // Start with calibration
+                transitionTo(States.CALIBRATING);
+            }
+
+            /**
+             * Stop/reset the verification process
+             */
+            function stop() {
+                state.isActive = false;
+                state.currentState = States.INITIALIZING;
+                clearInterval(timerInterval);
+                console.log('ChallengeManager: Stopped');
+            }
+
+            /**
+             * Reset for retry
+             */
+            function reset() {
+                stop();
+                state.challenges = [];
+                state.completedChallenges = [];
+                state.currentChallengeIndex = 0;
+                state.failureReason = null;
+
+                // Reset UI
+                elements.resultScreen.classList.remove('visible');
+                elements.resultScreen.classList.remove('failure');
+                elements.challengePanel.classList.remove('hidden');
+                elements.controlBtn.classList.remove('hidden');
+                elements.controlBtn.disabled = false;
+
+                updateProgressIndicators();
+                console.log('ChallengeManager: Reset');
+            }
+
+            /**
+             * Check if verification is currently active
+             */
+            function isActive() {
+                return state.isActive;
+            }
+
+            /**
+             * Get current state
+             */
+            function getCurrentState() {
+                return state.currentState;
+            }
+
+            /**
+             * Get current challenge
+             */
+            function getCurrentChallenge() {
+                return state.challenges[state.currentChallengeIndex] || null;
+            }
+
+            /**
+             * Get progress info
+             */
+            function getProgress() {
+                return {
+                    current: state.currentChallengeIndex + 1,
+                    total: state.challenges.length,
+                    completed: state.completedChallenges.length,
+                    challenges: state.challenges.map(c => c.name)
+                };
+            }
+
+            /**
+             * Update configuration
+             */
+            function setConfig(newConfig) {
+                Object.assign(config, newConfig);
+            }
+
+            /**
+             * Get configuration
+             */
+            function getConfig() {
+                return { ...config };
+            }
+
+            // Expose States for external use
+            return {
+                States,
+                ChallengeTypes,
+                start,
+                stop,
+                reset,
+                processFrame,
+                isActive,
+                getCurrentState,
+                getCurrentChallenge,
+                getProgress,
+                setConfig,
+                getConfig
+            };
+        })();
+
         // Initialize the app on page load
         document.addEventListener('DOMContentLoaded', async () => {
             console.log('Liveness Detection App - Initializing...');
@@ -2214,19 +2912,21 @@
                     startDetectionLoop();
                 }
 
-                // Button will be used to start verification challenges
-                // (Challenge state machine will be implemented in Task 10)
-                console.log('Verification started');
-                updateStatus('Verification in progress...');
+                // Start the verification challenge sequence
+                ChallengeManager.start();
             });
 
             // Retry button click handler
             elements.retryBtn.addEventListener('click', () => {
-                // Reset and restart (full implementation in later tasks)
-                elements.resultScreen.classList.remove('visible');
-                elements.challengePanel.classList.remove('hidden');
-                elements.controlBtn.classList.remove('hidden');
-                startDetectionLoop();
+                // Reset ChallengeManager and restart
+                ChallengeManager.reset();
+
+                // Ensure detection loop is running
+                if (!isDetectionRunning) {
+                    startDetectionLoop();
+                }
+
+                updateStatus('Position your face in the oval and click Start');
             });
         });
     </script>
