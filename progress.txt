@@ -331,3 +331,16 @@
   - Hold duration requirements (already in Tasks 7-9)
   - Continuous face presence validation (new)
 - Commit: cde634a
+
+### Bug Fixes
+
+#### Fix 1: MediaPipe CDN 404 error - COMPLETED
+- Issue: The MediaPipe CDN URL `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js` was returning a 404 error
+- Root cause: The MediaPipe package structure changed and vision_bundle.js is no longer available at that path
+- Solution: Migrated to ES modules approach
+  - Changed from `<script src="...">` to `<script type="module">`
+  - Added ES module import: `import { FaceLandmarker, FilesetResolver } from "...vision_bundle.min.mjs"`
+  - Upgraded MediaPipe Tasks Vision from v0.10.3 to v0.10.18
+  - Removed deprecated `const { FaceLandmarker, FilesetResolver } = vision;` destructuring
+  - Updated WASM path to match the new version
+- Commit: 27872d3
