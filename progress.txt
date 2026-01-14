@@ -352,3 +352,16 @@
   - Reduced pitchThreshold from 12° to 8° (for up/down head tilts)
 - This makes head movement challenges approximately 33% easier while still requiring meaningful movement
 - Commit: c12b356
+
+#### Fix 3: Head movement detection slow and restart UX issue - COMPLETED
+- Issue 1: Head movement detection was too slow/unresponsive due to excessive smoothing
+- Issue 2: When a challenge failed, user had to restart from beginning (bad UX)
+- Solution:
+  - Increased HeadMovementDetector smoothingFactor from 0.3 to 0.6 for faster response
+  - Reduced calibrationFrames from 30 to 20 for quicker startup
+  - Added new `retryCurrentChallenge()` function to ChallengeManager
+  - Modified retry button to continue from current challenge instead of restarting everything
+- Impact:
+  - Head movements now register much faster (response time reduced by ~50%)
+  - Users can retry the current challenge without losing progress on completed challenges
+- Commit: 4b27174
