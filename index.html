@@ -475,6 +475,8 @@
         let faceLandmarker = null;
         let isModelLoading = false;
         let isModelReady = false;
+        let videoStream = null;
+        let isCameraReady = false;
 
         /**
          * Initialize FaceLandmarker with GPU delegate
@@ -508,11 +510,7 @@
 
                 isModelReady = true;
                 isModelLoading = false;
-                updateStatus('Face detection model loaded');
                 console.log('FaceLandmarker initialized successfully with GPU delegate');
-
-                // Enable the start button once model is ready
-                elements.controlBtn.disabled = false;
 
                 return true;
             } catch (error) {
@@ -554,10 +552,8 @@
 
                 isModelReady = true;
                 isModelLoading = false;
-                updateStatus('Face detection model loaded (CPU mode)');
                 console.log('FaceLandmarker initialized with CPU delegate (fallback)');
 
-                elements.controlBtn.disabled = false;
                 return true;
             } catch (error) {
                 console.error('CPU fallback also failed:', error);
@@ -596,15 +592,175 @@
             return isModelReady && faceLandmarker !== null;
         }
 
+        /**
+         * Initialize WebRTC camera with getUserMedia
+         * Requests camera access and sets up the video stream with mirrored view
+         */
+        async function initializeCamera() {
+            updateStatus('Requesting camera access...');
+
+            // Define video constraints for optimal face detection
+            const constraints = {
+                video: {
+                    width: { ideal: 640, max: 1280 },
+                    height: { ideal: 480, max: 720 },
+                    facingMode: 'user', // Front-facing camera
+                    frameRate: { ideal: 30, max: 60 }
+                },
+                audio: false
+            };
+
+            try {
+                // Request camera access
+                videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+                // Attach stream to video element
+                elements.video.srcObject = videoStream;
+
+                // Wait for video to be ready
+                await new Promise((resolve, reject) => {
+                    elements.video.onloadedmetadata = () => {
+                        // Set canvas dimensions to match video
+                        elements.canvas.width = elements.video.videoWidth;
+                        elements.canvas.height = elements.video.videoHeight;
+                        resolve();
+                    };
+                    elements.video.onerror = () => {
+                        reject(new Error('Video failed to load'));
+                    };
+                });
+
+                // Play the video
+                await elements.video.play();
+
+                isCameraReady = true;
+                updateStatus('Camera ready');
+                console.log(`Camera initialized: ${elements.video.videoWidth}x${elements.video.videoHeight}`);
+
+                return true;
+            } catch (error) {
+                console.error('Camera initialization failed:', error);
+                isCameraReady = false;
+
+                // Handle specific error types
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    showError('Camera access denied. Please allow camera access and refresh the page.');
+                } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+                    showError('No camera found. Please connect a camera and refresh the page.');
+                } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+                    showError('Camera is in use by another application. Please close other apps using the camera.');
+                } else if (error.name === 'OverconstrainedError') {
+                    // Try again with less strict constraints
+                    console.log('Constraints too strict, retrying with basic constraints...');
+                    return await initializeCameraBasic();
+                } else {
+                    showError(`Camera error: ${error.message || 'Unknown error occurred'}`);
+                }
+
+                return false;
+            }
+        }
+
+        /**
+         * Fallback camera initialization with basic constraints
+         * Used when ideal constraints cannot be satisfied
+         */
+        async function initializeCameraBasic() {
+            const basicConstraints = {
+                video: { facingMode: 'user' },
+                audio: false
+            };
+
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia(basicConstraints);
+                elements.video.srcObject = videoStream;
+
+                await new Promise((resolve, reject) => {
+                    elements.video.onloadedmetadata = () => {
+                        elements.canvas.width = elements.video.videoWidth;
+                        elements.canvas.height = elements.video.videoHeight;
+                        resolve();
+                    };
+                    elements.video.onerror = () => reject(new Error('Video failed to load'));
+                });
+
+                await elements.video.play();
+
+                isCameraReady = true;
+                updateStatus('Camera ready (basic mode)');
+                console.log(`Camera initialized (basic): ${elements.video.videoWidth}x${elements.video.videoHeight}`);
+
+                return true;
+            } catch (error) {
+                console.error('Basic camera initialization also failed:', error);
+                showError('Unable to access camera. Please check your browser settings.');
+                return false;
+            }
+        }
+
+        /**
+         * Stop the camera stream and release resources
+         */
+        function stopCamera() {
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log(`Stopped track: ${track.kind}`);
+                });
+                videoStream = null;
+            }
+            elements.video.srcObject = null;
+            isCameraReady = false;
+        }
+
+        /**
+         * Check if camera is ready for use
+         */
+        function isCameraInitialized() {
+            return isCameraReady && videoStream !== null && elements.video.readyState >= 2;
+        }
+
+        /**
+         * Check if both camera and model are ready
+         */
+        function isAppReady() {
+            return isCameraInitialized() && isFaceLandmarkerReady();
+        }
+
+        /**
+         * Enable the start button when both camera and model are ready
+         */
+        function checkAndEnableStartButton() {
+            if (isAppReady()) {
+                elements.controlBtn.disabled = false;
+                updateStatus('Position your face in the oval and click Start');
+            }
+        }
+
         // Initialize the app on page load
         document.addEventListener('DOMContentLoaded', async () => {
             console.log('Liveness Detection App - Initializing...');
 
-            // Disable button until model is loaded
+            // Disable button until both camera and model are ready
             elements.controlBtn.disabled = true;
 
-            // Start loading the FaceLandmarker model
-            await initializeFaceLandmarker();
+            // Initialize camera and model in parallel for faster startup
+            const [cameraResult, modelResult] = await Promise.all([
+                initializeCamera(),
+                initializeFaceLandmarker()
+            ]);
+
+            // Check if both initialized successfully
+            if (cameraResult && modelResult) {
+                checkAndEnableStartButton();
+            } else {
+                if (!cameraResult) {
+                    console.error('Camera initialization failed');
+                }
+                if (!modelResult) {
+                    console.error('Model initialization failed');
+                }
+            }
         });
     </script>
 </body>
